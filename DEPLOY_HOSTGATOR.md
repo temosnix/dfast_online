@@ -1,59 +1,98 @@
-# 🚀 Guia de Publicação no HostGator (Plano Turbo)
+# 🚀 Guia Prático de Publicação no HostGator (Plano Turbo)
 
-Este guia orienta passo a passo como colocar o **Dfast Online** no ar utilizando o seu **Plano Turbo da HostGator** e o domínio adquirido no **Registro.br**.
-
----
-
-### 1. Como Funciona no Plano Turbo
-O seu Plano Turbo permite até **3 domínios independentes**. No cPanel, cada domínio possui sua pasta:
-- Domínio Principal: pasta `public_html`
-- 2º Domínio (Domínio Adicional): pasta `public_html/dfast_online` (ou `dfast_online/`)
-- 3º Domínio: pasta correspondente cadastrada no cPanel
+Este guia orienta passo a passo como colocar o **Dfast Online** no ar no seu **Plano Turbo da HostGator** utilizando o pacote automatizado gerado pela squad.
 
 ---
 
-### 2. Passo a Passo de Envio
+### 📦 1. Pacote de Publicação Pronto
 
-#### Passo A: Preparar o Pacote Zip (Mais fácil para upload)
-1. No seu computador, todos os arquivos já foram compilados.
-2. Junte em um arquivo `.zip`:
-   - Os arquivos de `frontend/dist/` (`index.html` e a pasta `assets/`).
-   - A pasta `api/` completa.
-   - O arquivo `.htaccess` da raiz.
+Já geramos o arquivo ZIP completo pronto para upload no cPanel:
+📁 **Localização no seu computador:**
+`C:\Users\User\projetos\dfast_online\dfast_online_hostgator.zip`
 
-#### Passo B: Upload pelo Gerenciador de Arquivos do cPanel
-1. Acesse o **cPanel da HostGator**.
-2. Abra a opção **Gerenciador de Arquivos**.
-3. Navegue até a pasta do domínio escolhido (ex: `public_html`).
-4. Clique no botão **Carregar** no topo e envie o arquivo `.zip`.
-5. Clique com o botão direito sobre o arquivo enviado e selecione **Extrair (Extract)**.
-
-#### Passo C: Enviar o Banco de Dados SQLite
-1. No Gerenciador de Arquivos, dentro da pasta `api/database/`, faça o upload do seu arquivo `db_app.db`.
-2. O arquivo `api/database/.htaccess` já existente bloqueia qualquer pessoa na internet de fazer download do seu banco, garantindo total segurança!
+> **O que já está incluído dentro desse ZIP:**
+> - Frontend moderno compilado (`index.html` e pasta `assets/`).
+> - Backend PHP nativo e seguro (`api/index.php`, `api/crypto.php`, `api/db.php`, `api/mercadolivre.php`).
+> - Banco de dados SQLite oficial com todas as tabelas, componentes e usuários (`api/database/db_app.db`).
+> - Arquivos de segurança e roteamento Apache (`.htaccess` na raiz e `api/database/.htaccess`).
+> - Variáveis de ambiente otimizadas para produção (`.env`).
 
 ---
 
-### 3. Apontar o Domínio no Registro.br
+### 🌐 2. Definir a Pasta no cPanel (Plano Turbo)
 
-1. Acesse o painel do **Registro.br** (registro.br).
-2. Clique no seu domínio.
-3. Na seção **DNS**, clique em **Alterar Servidores DNS** e informe os nameservers da sua conta HostGator (normalmente):
-   - **Servidor 1**: `ns1.hostgator.com.br` (ou o informado no e-mail de boas-vindas da HostGator)
-   - **Servidor 2**: `ns2.hostgator.com.br`
-4. Salve as alterações. Em poucos minutos o domínio passará a responder pelo seu plano da HostGator.
-
----
-
-### 4. Certificado SSL / HTTPS
-No cPanel da HostGator, o SSL gratuito é emitido automaticamente para todos os domínios via **AutoSSL (Let's Encrypt / Sectigo)** em até 1 hora após a propagação do DNS.
+O Plano Turbo da HostGator suporta múltiplos domínios:
+* **Se for usar no domínio principal:** a pasta de destino é `public_html/`
+* **Se for usar em um domínio adicional (ex: `dfastonline.com.br`):**
+  1. No cPanel, abra **Domínios** (ou **Domínios Adicionais**).
+  2. Veja qual pasta está atribuída ao domínio (geralmente `public_html/dfast_online` ou `dfast_online`).
 
 ---
 
-### 5. Configurar o Mercado Livre para Produção
-Ao acessar o seu site no domínio definitivo:
-1. Clique no ícone de engrenagem ⚙️ no topo do sistema.
-2. Preencha seu **App ID**, **Secret Key** e **Seller ID**.
-3. No painel de Desenvolvedores do Mercado Livre ([developers.mercadolivre.com.br](https://developers.mercadolivre.com.br)), configure a **URL de Redirecionamento (Redirect URI)** para:
-   `https://seudominio.com.br/api/mercadolivre/callback`
-4. Clique em **Sincronizar ML** para importar suas vendas em tempo real!
+### 📤 3. Passo a Passo do Envio via cPanel
+
+1. **Acesse o cPanel da HostGator:**
+   - Entre pelo painel do cliente HostGator ou direto em `https://seudominio.com.br:2083`.
+2. **Abra o Gerenciador de Arquivos (File Manager):**
+   - No cPanel, clique no ícone **Gerenciador de Arquivos**.
+   - Navegue até a pasta do seu domínio (ex: `public_html` ou a pasta do domínio adicional).
+3. **Fazer Upload do ZIP:**
+   - No menu superior, clique em **Carregar (Upload)**.
+   - Selecione o arquivo `C:\Users\User\projetos\dfast_online\dfast_online_hostgator.zip`.
+4. **Extrair os Arquivos:**
+   - Volte ao Gerenciador de Arquivos e clique em **Atualizar (Reload)**.
+   - Clique com o botão direito no arquivo `dfast_online_hostgator.zip` e escolha **Extrair (Extract)**.
+   - Confirme a extração na pasta atual.
+   - Após extrair, você pode excluir o arquivo `.zip` para economizar espaço.
+
+---
+
+### ⚙️ 4. Ajustar a Versão do PHP (Recomendado PHP 8.2 ou 8.3)
+
+O sistema utiliza os recursos mais modernos de criptografia (AES-256-GCM) e SQLite do PHP 8.2+:
+1. No cPanel, pesquise por **Gerenciador MultiPHP** (ou **MultiPHP Manager**).
+2. Na lista de domínios, marque a caixinha do seu domínio.
+3. No campo "Versão do PHP", selecione **PHP 8.2** (ou **PHP 8.3**) e clique em **Aplicar**.
+
+---
+
+### 🔒 5. Certificado SSL / HTTPS (Cadeado Verde Gratuito)
+
+No Plano Turbo da HostGator, o SSL gratuito é emitido automaticamente:
+1. No cPanel, pesquise por **Status do SSL/TLS**.
+2. Verifique se o domínio possui o certificado ativo.
+3. Caso ainda não tenha sido emitido, marque o domínio e clique em **Executar AutoSSL**. O certificado é emitido em poucos minutos.
+
+---
+
+### 🔑 6. Primeiro Acesso e Login
+
+Acesse seu site no navegador (`https://seudominio.com.br`):
+1. Você verá a **Tela de Login** do Dfast Online.
+2. Acesse com sua conta Master:
+   - **Usuário:** `daniloivanoff`
+   - **Senha:** `D4n1l002!@!`
+3. O painel abrirá com acesso total liberado!
+
+---
+
+### 🤝 7. Configuração do Mercado Livre em Produção
+
+1. Com o login Master ativo, clique no botão **Config** (ícone de engrenagem) no topo.
+2. Preencha seu **App ID**, **Secret Key** e **Seller ID** da sua conta do Mercado Livre.
+3. No portal de desenvolvedores do Mercado Livre ([developers.mercadolivre.com.br](https://developers.mercadolivre.com.br)):
+   - Abra o seu aplicativo.
+   - Na opção **Redirect URI**, cadastre:
+     `https://seudominio.com.br/api/mercadolivre/callback`
+   - Salve as alterações.
+4. No Dfast Online, clique em **Sincronizar ML** para puxar as vendas reais e os SLAs de expedição do dia!
+
+---
+
+### 🔄 Como Gerar um Novo Pacote de Atualização no Futuro
+
+Sempre que fizer alterações no código e quiser enviar uma nova versão para a HostGator, basta executar no terminal:
+```bash
+node package_hostgator.js
+```
+O script recompila e gera um novo `dfast_online_hostgator.zip` em 2 segundos!

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build:frontend": "cd frontend && npm install && npm run build"
+    "build:frontend": "cd frontend && npm install && npm run build",
+    "build:hostgator": "npm run build:frontend && node package_hostgator.js"
   },
   "keywords": [
     "mercado-livre",

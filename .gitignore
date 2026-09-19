@@ -27,7 +27,9 @@ banco/
 # ==========================================
 node_modules/
 dist/
+dist_hostgator/
 build/
+*.zip
 .next/
 out/
 coverage/
