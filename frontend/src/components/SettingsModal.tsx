@@ -5,10 +5,11 @@ import {
   Key, 
   Clock, 
   ExternalLink, 
-  Check, 
   AlertCircle, 
   Lock,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  Check
 } from 'lucide-react';
 import { MLConfig } from '../types';
 
@@ -16,6 +17,7 @@ interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   config: MLConfig | null;
+  onOpenAudit?: () => void;
   onSaveConfig: (form: {
     app_id: string;
     secret_key: string;
@@ -31,6 +33,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   config,
+  onOpenAudit,
   onSaveConfig,
 }) => {
   const [formData, setFormData] = useState({
@@ -44,6 +47,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   });
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [refreshingToken, setRefreshingToken] = useState(false);
+  const [tokenMessage, setTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const handleRefreshToken = async () => {
+    setRefreshingToken(true);
+    setTokenMessage(null);
+    try {
+      const res = await fetch('/api/mercadolivre/refresh', { method: 'POST' });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setTokenMessage({ text: 'Tokens de acesso do ML renovados com sucesso!', type: 'success' });
+      } else {
+        setTokenMessage({ text: data.error || 'Falha ao renovar token', type: 'error' });
+      }
+    } catch (e: any) {
+      setTokenMessage({ text: 'Erro ao comunicar com a API do servidor', type: 'error' });
+    } finally {
+      setRefreshingToken(false);
+      setTimeout(() => setTokenMessage(null), 5000);
+    }
+  };
+
+  const handleConnectOAuth = async () => {
+    try {
+      const res = await fetch('/api/mercadolivre/auth-url');
+      const data = await res.json();
+      if (res.ok && data.auth_url) {
+        window.open(data.auth_url, '_blank');
+      } else {
+        alert('Configure o App ID e Secret Key antes de iniciar a conexão OAuth.');
+      }
+    } catch (e) {
+      alert('Erro ao gerar URL segura de autorização OAuth.');
+    }
+  };
 
   useEffect(() => {
     if (config) {
@@ -197,6 +235,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </span>
             </div>
           )}
+
+          {/* Token Message Feedback */}
+          {tokenMessage && (
+            <div className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2 ${
+              tokenMessage.type === 'success' 
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' 
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
+            }`}>
+              {tokenMessage.type === 'success' ? <Check className="w-4 h-4 text-emerald-400" /> : <AlertCircle className="w-4 h-4 text-rose-400" />}
+              <span>{tokenMessage.text}</span>
+            </div>
+          )}
+
+          {/* Quick Security & Integration Actions */}
+          <div className="pt-1 grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={handleConnectOAuth}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold border border-slate-700 hover:border-sky-500/40 transition-all flex items-center justify-center gap-1.5"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-sky-400" />
+              <span>Login OAuth ML</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleRefreshToken}
+              disabled={refreshingToken}
+              className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold border border-slate-700 hover:border-emerald-500/40 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-400 ${refreshingToken ? 'animate-spin' : ''}`} />
+              <span>{refreshingToken ? 'Renovando...' : 'Renovar Token'}</span>
+            </button>
+
+            {onOpenAudit && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenAudit();
+                }}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] font-semibold border border-slate-700 hover:border-amber-500/40 transition-all flex items-center justify-center gap-1.5"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                <span>Ver Auditoria</span>
+              </button>
+            )}
+          </div>
 
           {/* Cutoff Times */}
           <div className="grid grid-cols-2 gap-3 pt-2">

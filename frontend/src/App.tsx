@@ -4,6 +4,7 @@ import { PickingView } from './components/PickingView';
 import { StockView } from './components/StockView';
 import { PurchaseView } from './components/PurchaseView';
 import { SettingsModal } from './components/SettingsModal';
+import { AuditModal } from './components/AuditModal';
 import { 
   Stats, 
   Pedido, 
@@ -31,6 +32,7 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [simulating, setSimulating] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isAuditOpen, setIsAuditOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
@@ -207,6 +209,7 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         openSettings={() => setIsSettingsOpen(true)}
+        onOpenAudit={() => setIsAuditOpen(true)}
         mlConfig={mlConfig}
         onSyncML={handleSyncML}
         onSimulateML={handleSimulateML}
@@ -276,7 +279,14 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         config={mlConfig}
+        onOpenAudit={() => setIsAuditOpen(true)}
         onSaveConfig={handleSaveConfig}
+      />
+
+      {/* Security Audit Modal */}
+      <AuditModal
+        isOpen={isAuditOpen}
+        onClose={() => setIsAuditOpen(false)}
       />
     </div>
   );

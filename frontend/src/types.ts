@@ -83,3 +83,11 @@ export interface MLConfig {
   flex_cutoff: string;
   coleta_cutoff: string;
 }
+
+export interface AuditLog {
+  id: number;
+  evento: string;
+  detalhes: string;
+  ip_origem: string;
+  criado_em: string;
+}

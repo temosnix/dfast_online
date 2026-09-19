@@ -9,7 +9,8 @@ import {
   Trash2, 
   Clock, 
   CheckCircle2, 
-  AlertCircle
+  AlertCircle,
+  ShieldCheck
 } from 'lucide-react';
 import { MLConfig } from '../types';
 
@@ -17,6 +18,7 @@ interface NavbarProps {
   activeTab: 'picking' | 'stock' | 'purchases';
   setActiveTab: (tab: 'picking' | 'stock' | 'purchases') => void;
   openSettings: () => void;
+  onOpenAudit: () => void;
   mlConfig: MLConfig | null;
   onSyncML: () => void;
   onSimulateML: () => void;
@@ -30,6 +32,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   activeTab,
   setActiveTab,
   openSettings,
+  onOpenAudit,
   mlConfig,
   onSyncML,
   onSimulateML,
@@ -99,11 +102,50 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Actions & ML Controls */}
           <div className="flex items-center gap-2">
+            {/* Active ML Token Status Pill */}
+            {mlConfig?.has_access_token ? (
+              <div 
+                onClick={openSettings}
+                className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-pointer hover:bg-emerald-500/20 transition-all"
+                title="Token oficial ativo com AES-256-GCM. Clique para ver detalhes."
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>Token Ativo (6h)</span>
+                {mlConfig.token_expires_at && (
+                  <span className="text-[10px] text-emerald-200/70 font-mono bg-emerald-950/60 px-1.5 py-0.5 rounded">
+                    Até {new Date(mlConfig.token_expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div 
+                onClick={openSettings}
+                className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 text-xs cursor-pointer hover:bg-slate-800 transition-all"
+                title="Nenhum token ativo no momento"
+              >
+                <span className="w-2 h-2 rounded-full bg-slate-500"></span>
+                <span>Token Inativo</span>
+              </div>
+            )}
+
             {/* Flex Cutoff Pill */}
             <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-medium">
               <Clock className="w-3.5 h-3.5" />
               <span>Corte Flex: <strong>{flexCutoff}h</strong></span>
             </div>
+
+            {/* Security Audit Button */}
+            <button
+              onClick={onOpenAudit}
+              title="Abrir Trilha de Auditoria de Segurança & LGPD (Mercado Livre Developers)"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 hover:text-emerald-200 text-xs font-semibold border border-emerald-500/30 transition-all active:scale-95"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">Auditoria</span>
+            </button>
 
             {/* Sync ML Button */}
             <button
