@@ -15,7 +15,8 @@ import {
   StockMetrics,
   PurchaseItem, 
   MLConfig,
-  UnregisteredAd
+  UnregisteredAd,
+  PickingCounts
 } from './types';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
@@ -32,6 +33,8 @@ export default function App() {
   const [distribuidorNome, setDistribuidorNome] = useState('Distribuidor Nissi');
   const [dataGeracao, setDataGeracao] = useState('');
   const [mlConfig, setMlConfig] = useState<MLConfig | null>(null);
+  const [tipoOrigem, setTipoOrigem] = useState<'nissi' | 'producao' | 'todos'>('nissi');
+  const [pickingCounts, setPickingCounts] = useState<PickingCounts>({ nissi: 0, producao: 0, todos: 0 });
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -51,11 +54,11 @@ export default function App() {
     setIsRegisterOpen(true);
   };
 
-  const loadData = async () => {
+  const loadData = async (tipo: 'nissi' | 'producao' | 'todos' = tipoOrigem) => {
     try {
       const [statsRes, pickingRes, mlConfigRes, unregRes, stockRes] = await Promise.all([
         fetch('/api/stats'),
-        fetch('/api/picking'),
+        fetch(`/api/picking?tipo=${tipo}`),
         fetch('/api/mercadolivre/config'),
         fetch('/api/anuncios/unregistered'),
         fetch('/api/stock'),
@@ -71,6 +74,7 @@ export default function App() {
         setPedidos(d.pedidos || []);
         setRotaConsolidada(d.rota_consolidada || []);
         setCaixasNecessarias(d.caixas_necessarias || []);
+        if (d.counts) setPickingCounts(d.counts);
       }
 
       if (mlConfigRes.ok) {
@@ -132,6 +136,22 @@ export default function App() {
     if (activeTab === 'picking') loadData();
   }, [activeTab]);
 
+  const handleChangeTipoOrigem = async (novoTipo: 'nissi' | 'producao' | 'todos') => {
+    setTipoOrigem(novoTipo);
+    try {
+      const pickingRes = await fetch(`/api/picking?tipo=${novoTipo}`);
+      if (pickingRes.ok) {
+        const d = await pickingRes.json();
+        setPedidos(d.pedidos || []);
+        setRotaConsolidada(d.rota_consolidada || []);
+        setCaixasNecessarias(d.caixas_necessarias || []);
+        if (d.counts) setPickingCounts(d.counts);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleToggleStatus = async (orderId: string) => {
     try {
       const res = await fetch('/api/picking/toggle', {
@@ -140,7 +160,7 @@ export default function App() {
         body: JSON.stringify({ order_id: orderId }),
       });
       if (res.ok) {
-        loadData();
+        loadData(tipoOrigem);
       }
     } catch (err) {
       showNotification('Falha ao alternar status do pedido', 'error');
@@ -266,6 +286,10 @@ export default function App() {
                 loading={loading}
                 unregisteredAds={unregisteredAds}
                 onOpenRegisterModal={handleOpenRegisterModal}
+                tipoOrigem={tipoOrigem}
+                onChangeTipoOrigem={handleChangeTipoOrigem}
+                pickingCounts={pickingCounts}
+                stats={stats}
               />
             )}
 

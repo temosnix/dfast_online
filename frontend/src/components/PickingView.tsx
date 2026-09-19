@@ -17,7 +17,7 @@ import {
   PlusCircle,
   Search
 } from 'lucide-react';
-import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd } from '../types';
+import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd, Stats, PickingCounts } from '../types';
 
 interface PickingViewProps {
   pedidos: Pedido[];
@@ -27,6 +27,10 @@ interface PickingViewProps {
   loading: boolean;
   unregisteredAds?: UnregisteredAd[];
   onOpenRegisterModal?: (ad?: UnregisteredAd) => void;
+  tipoOrigem?: 'nissi' | 'producao' | 'todos';
+  onChangeTipoOrigem?: (tipo: 'nissi' | 'producao' | 'todos') => void;
+  pickingCounts?: PickingCounts;
+  stats?: Stats | null;
 }
 
 export const PickingView: React.FC<PickingViewProps> = ({
@@ -37,6 +41,10 @@ export const PickingView: React.FC<PickingViewProps> = ({
   loading,
   unregisteredAds = [],
   onOpenRegisterModal,
+  tipoOrigem = 'nissi',
+  onChangeTipoOrigem,
+  pickingCounts,
+  stats,
 }) => {
   const [viewMode, setViewMode] = useState<'rota' | 'pedidos'>('rota');
   const [filterType, setFilterType] = useState<'all' | 'flex' | 'coleta'>('all');
@@ -125,12 +133,20 @@ export const PickingView: React.FC<PickingViewProps> = ({
           </div>
           <div className="flex items-baseline gap-2 mt-2">
             <h3 className="text-3xl font-extrabold text-white">{totalPedidos}</h3>
-            <span className="text-xs text-slate-400">pedidos hoje</span>
+            <span className="text-xs text-slate-400">
+              pedidos {tipoOrigem === 'nissi' ? 'Almoxarifado' : tipoOrigem === 'producao' ? 'Produção Local' : 'hoje'}
+            </span>
           </div>
           <p className="text-xs text-slate-400 mt-2 flex items-center gap-1.5">
             <span className="text-emerald-400 font-semibold">{separados} separados</span> • 
             <span className="text-amber-400 font-semibold">{pendentes} pendentes</span>
           </p>
+          {(stats?.pedidos_producao_local ?? 0) > 0 && tipoOrigem === 'nissi' && (
+            <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
+              <span className="text-slate-400">Produção Local:</span>
+              <span className="text-emerald-400 font-bold">{stats?.pedidos_producao_local} dispensados</span>
+            </div>
+          )}
         </div>
 
         {/* Envios Flex no Mesmo Dia */}
@@ -190,6 +206,78 @@ export const PickingView: React.FC<PickingViewProps> = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Origin Selection Tabs: Almoxarifado Nissi vs Produção Local vs Todos */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/60 p-3.5 rounded-2xl border border-slate-800 no-print">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider ml-1">Filtro de Origem:</span>
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+            <button
+              onClick={() => onChangeTipoOrigem?.('nissi')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                tipoOrigem === 'nissi'
+                  ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+              }`}
+            >
+              <span>📦 Almoxarifado Nissi</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${
+                tipoOrigem === 'nissi' ? 'bg-sky-700 text-white' : 'bg-slate-800 text-slate-300'
+              }`}>
+                {pickingCounts?.nissi ?? 0}
+              </span>
+            </button>
+
+            <button
+              onClick={() => onChangeTipoOrigem?.('producao')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                tipoOrigem === 'producao'
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+              }`}
+            >
+              <span>🏭 Produção Local</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${
+                tipoOrigem === 'producao' ? 'bg-emerald-800 text-white' : 'bg-slate-800 text-slate-300'
+              }`}>
+                {pickingCounts?.producao ?? 0}
+              </span>
+            </button>
+
+            <button
+              onClick={() => onChangeTipoOrigem?.('todos')}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                tipoOrigem === 'todos'
+                  ? 'bg-purple-600 text-white shadow-md shadow-purple-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/40'
+              }`}
+            >
+              <span>📋 Todos os Pedidos</span>
+              <span className={`px-1.5 py-0.5 rounded-md text-[10px] font-black ${
+                tipoOrigem === 'todos' ? 'bg-purple-800 text-white' : 'bg-slate-800 text-slate-300'
+              }`}>
+                {pickingCounts?.todos ?? 0}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {tipoOrigem === 'nissi' && (
+          <span className="text-[11px] text-sky-300 font-medium px-3 py-1 rounded-lg bg-sky-500/10 border border-sky-500/20">
+            ✓ Exibindo apenas pedidos com peças físicas para separação no galpão
+          </span>
+        )}
+        {tipoOrigem === 'producao' && (
+          <span className="text-[11px] text-emerald-300 font-medium px-3 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            ✓ Fabricação Própria (itens dispensados da rota de separação no almoxarifado)
+          </span>
+        )}
+        {tipoOrigem === 'todos' && (
+          <span className="text-[11px] text-purple-300 font-medium px-3 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20">
+            ✓ Visão consolidada de todas as vendas do dia
+          </span>
+        )}
       </div>
 
       {/* Control Bar: View Mode Switcher, Filters, and Print Button */}
@@ -298,11 +386,28 @@ export const PickingView: React.FC<PickingViewProps> = ({
             <div className="p-12 text-center text-slate-500">
               <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-500/40 mb-3" />
               <p className="font-semibold text-slate-300">
-                {searchQuery ? 'Nenhum item encontrado com esta busca.' : 'Tudo separado!'}
+                {searchQuery
+                  ? 'Nenhum item encontrado com esta busca.'
+                  : tipoOrigem === 'producao'
+                  ? 'Itens de Fabricação Própria não necessitam de coleta em prateleiras do almoxarifado Nissi.'
+                  : 'Tudo separado!'}
               </p>
               <p className="text-xs mt-1">
-                {searchQuery ? 'Tente buscar por outro código ou prateleira.' : 'Nenhum item pendente de coleta no estoque no momento.'}
+                {searchQuery
+                  ? 'Tente buscar por outro código ou prateleira.'
+                  : tipoOrigem === 'producao'
+                  ? 'Estes produtos são montados no local e dispensados de picking. Alterne para "Por Pedido / Etiqueta" para conferir os despachos.'
+                  : 'Nenhum item pendente de coleta no estoque no momento.'}
               </p>
+              {tipoOrigem === 'producao' && !searchQuery && (
+                <button
+                  onClick={() => setViewMode('pedidos')}
+                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+                >
+                  <Box className="w-3.5 h-3.5" />
+                  <span>Ver Por Pedido / Etiqueta</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">

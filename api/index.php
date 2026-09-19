@@ -63,9 +63,19 @@ try {
         $totalComponentes = $pdo->query("SELECT COUNT(*) FROM distribuidor")->fetchColumn();
         
         $totalPedidos = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas")->fetchColumn();
-        $pedidosPendentes = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas WHERE status_picking = 'pendente'")->fetchColumn();
+        $pedidosPendentes = $pdo->query("
+            SELECT COUNT(*) 
+            FROM pedidos_vendas p
+            LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE p.status_picking = 'pendente' AND (a.kit IS NULL OR a.kit = 'S')
+        ")->fetchColumn();
         $pedidosSeparados = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas WHERE status_picking = 'separado'")->fetchColumn();
-        $pedidosFlex = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas WHERE envio_tipo = 'flex' AND status_picking = 'pendente'")->fetchColumn();
+        $pedidosFlex = $pdo->query("
+            SELECT COUNT(*) 
+            FROM pedidos_vendas p
+            LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE p.envio_tipo = 'flex' AND p.status_picking = 'pendente' AND (a.kit IS NULL OR a.kit = 'S')
+        ")->fetchColumn();
 
         // Itens com estoque baixo
         $estoqueBaixo = $pdo->query("
@@ -81,6 +91,14 @@ try {
             WHERE a.id_ml IS NULL
         ")->fetchColumn();
 
+        // Pedidos de produção local (sem kit de peças nissi)
+        $pedidosProducaoLocal = $pdo->query("
+            SELECT COUNT(*) 
+            FROM pedidos_vendas p
+            JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE a.kit = 'N'
+        ")->fetchColumn();
+
         echo json_encode([
             'success' => true,
             'stats' => [
@@ -92,6 +110,7 @@ try {
                 'pedidos_flex_hoje' => (int)$pedidosFlex,
                 'itens_estoque_baixo' => (int)$estoqueBaixo,
                 'anuncios_sem_cadastro' => (int)$anunciosSemCadastro,
+                'pedidos_producao_local' => (int)$pedidosProducaoLocal,
             ]
         ]);
         exit;
@@ -101,11 +120,21 @@ try {
     // ROTA: /api/picking (Lista de Separação Inteligente)
     // -------------------------------------------------------------
     if ($route === 'picking' && $method === 'GET') {
+        $tipo = $_GET['tipo'] ?? 'nissi'; // 'nissi' (padrão: almoxarifado), 'producao', 'todos'
+
+        $sqlWhere = '';
+        if ($tipo === 'nissi') {
+            $sqlWhere = "WHERE (a.kit = 'S' OR a.id_ml IS NULL)";
+        } else if ($tipo === 'producao') {
+            $sqlWhere = "WHERE a.kit = 'N'";
+        }
+
         // 1. Visão por Pedido
         $pedidos = $pdo->query("
             SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
             FROM pedidos_vendas p
             LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            {$sqlWhere}
             ORDER BY 
                 CASE WHEN p.envio_tipo = 'flex' THEN 0 ELSE 1 END,
                 p.status_picking ASC,
@@ -167,11 +196,31 @@ try {
         ");
         $caixas = $caixasStmt->fetchAll();
 
+        // 4. Contadores por Origem
+        $countNissi = $pdo->query("
+            SELECT COUNT(*) FROM pedidos_vendas p
+            LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE (a.kit = 'S' OR a.id_ml IS NULL)
+        ")->fetchColumn();
+
+        $countProducao = $pdo->query("
+            SELECT COUNT(*) FROM pedidos_vendas p
+            JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE a.kit = 'N'
+        ")->fetchColumn();
+
+        $countTodos = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas")->fetchColumn();
+
         echo json_encode([
             'success' => true,
             'pedidos' => $pedidos,
             'rota_consolidada' => $consolidado,
             'caixas_necessarias' => $caixas,
+            'counts' => [
+                'nissi' => (int)$countNissi,
+                'producao' => (int)$countProducao,
+                'todos' => (int)$countTodos
+            ]
         ]);
         exit;
     }
@@ -613,6 +662,16 @@ try {
                     }
                 }
             }
+
+            if ($kit === 'N') {
+                // Anúncios sem kit são de produção local e não precisam de separação no almoxarifado
+                $pdo->prepare("
+                    UPDATE pedidos_vendas 
+                    SET status_picking = 'separado', separado_em = CURRENT_TIMESTAMP 
+                    WHERE ml_item_id = ? AND status_picking = 'pendente'
+                ")->execute([$idMl]);
+            }
+
             $pdo->commit();
         } catch (Exception $e) {
             $pdo->rollBack();

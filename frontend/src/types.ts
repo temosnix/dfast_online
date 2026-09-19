@@ -7,6 +7,13 @@ export interface Stats {
   pedidos_flex_hoje: number;
   itens_estoque_baixo: number;
   anuncios_sem_cadastro?: number;
+  pedidos_producao_local?: number;
+}
+
+export interface PickingCounts {
+  nissi: number;
+  producao: number;
+  todos: number;
 }
 
 export interface UnregisteredAd {

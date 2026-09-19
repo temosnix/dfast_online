@@ -187,8 +187,8 @@ class MercadoLivreClient {
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO pedidos_vendas 
-            (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking)
-            VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :data_venda, :envio_tipo, :envio_status, 'pendente')
+            (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking, separado_em)
+            VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :data_venda, :envio_tipo, :envio_status, :status_picking, :separado_em)
         ");
 
         foreach ($results as $order) {
@@ -231,6 +231,13 @@ class MercadoLivreClient {
                 $titleClean = substr($rawTitle, 0, 150);
                 $quantity = max(1, min(1000, (int)($itemObj['quantity'] ?? 1)));
 
+                // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
+                $adCheck = $this->pdo->prepare("SELECT kit FROM anuncios WHERE id_ml = ?");
+                $adCheck->execute([$mlItemId]);
+                $adRow = $adCheck->fetch();
+                $initialStatus = ($adRow && $adRow['kit'] === 'N') ? 'separado' : 'pendente';
+                $separadoEm = ($initialStatus === 'separado') ? date('Y-m-d H:i:s') : null;
+
                 $stmt->execute([
                     'order_id' => $orderId,
                     'ml_item_id' => $mlItemId,
@@ -239,7 +246,9 @@ class MercadoLivreClient {
                     'comprador' => substr($buyerClean, 0, 80),
                     'data_venda' => $dateCreated,
                     'envio_tipo' => $envioTipo,
-                    'envio_status' => 'ready_to_ship'
+                    'envio_status' => 'ready_to_ship',
+                    'status_picking' => $initialStatus,
+                    'separado_em' => $separadoEm,
                 ]);
                 $savedCount++;
 

@@ -222,15 +222,31 @@ const server = http.createServer(async (req, res) => {
       const totalAnuncios = db.prepare("SELECT COUNT(*) as c FROM anuncios").get().c;
       const totalComponentes = db.prepare("SELECT COUNT(*) as c FROM distribuidor").get().c;
       const totalPedidos = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas").get().c;
-      const pedidosPendentes = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas WHERE status_picking = 'pendente'").get().c;
+      const pedidosPendentes = db.prepare(`
+        SELECT COUNT(*) as c 
+        FROM pedidos_vendas p
+        LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE p.status_picking = 'pendente' AND (a.kit IS NULL OR a.kit = 'S')
+      `).get().c;
       const pedidosSeparados = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas WHERE status_picking = 'separado'").get().c;
-      const pedidosFlex = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas WHERE envio_tipo = 'flex' AND status_picking = 'pendente'").get().c;
+      const pedidosFlex = db.prepare(`
+        SELECT COUNT(*) as c 
+        FROM pedidos_vendas p
+        LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE p.envio_tipo = 'flex' AND p.status_picking = 'pendente' AND (a.kit IS NULL OR a.kit = 'S')
+      `).get().c;
       const estoqueBaixo = db.prepare("SELECT COUNT(*) as c FROM estoque_saldos s WHERE s.saldo_atual <= s.estoque_minimo").get().c;
       const anunciosSemCadastro = db.prepare(`
         SELECT COUNT(DISTINCT p.ml_item_id) as c
         FROM pedidos_vendas p
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
         WHERE a.id_ml IS NULL
+      `).get().c;
+      const pedidosProducaoLocal = db.prepare(`
+        SELECT COUNT(*) as c
+        FROM pedidos_vendas p
+        JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE a.kit = 'N'
       `).get().c;
 
       return sendJson(res, 200, {
@@ -244,6 +260,7 @@ const server = http.createServer(async (req, res) => {
           pedidos_flex_hoje: pedidosFlex,
           itens_estoque_baixo: estoqueBaixo,
           anuncios_sem_cadastro: anunciosSemCadastro,
+          pedidos_producao_local: pedidosProducaoLocal,
         }
       });
     } catch (err) {
@@ -251,13 +268,23 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 2. /api/picking
+  // 2. /api/picking (Separação com suporte a filtro de origem)
   if (pathname === '/api/picking' && req.method === 'GET') {
     try {
+      const tipo = parsedUrl.searchParams.get('tipo') || 'nissi'; // 'nissi' (padrão: almoxarifado), 'producao', 'todos'
+
+      let sqlWhere = '';
+      if (tipo === 'nissi') {
+        sqlWhere = "WHERE (a.kit = 'S' OR a.id_ml IS NULL)";
+      } else if (tipo === 'producao') {
+        sqlWhere = "WHERE a.kit = 'N'";
+      }
+
       const pedidos = db.prepare(`
         SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
         FROM pedidos_vendas p
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        ${sqlWhere}
         ORDER BY 
           CASE WHEN p.envio_tipo = 'flex' THEN 0 ELSE 1 END,
           p.status_picking ASC,
@@ -312,11 +339,30 @@ const server = http.createServer(async (req, res) => {
         ORDER BY a.caixa ASC
       `).all();
 
+      const countNissi = db.prepare(`
+        SELECT COUNT(*) as c FROM pedidos_vendas p
+        LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE (a.kit = 'S' OR a.id_ml IS NULL)
+      `).get().c;
+
+      const countProducao = db.prepare(`
+        SELECT COUNT(*) as c FROM pedidos_vendas p
+        JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE a.kit = 'N'
+      `).get().c;
+
+      const countTodos = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas").get().c;
+
       return sendJson(res, 200, {
         success: true,
         pedidos,
         rota_consolidada: rotaConsolidada,
         caixas_necessarias: caixasNecessarias,
+        counts: {
+          nissi: countNissi,
+          producao: countProducao,
+          todos: countTodos
+        }
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
@@ -738,6 +784,16 @@ const server = http.createServer(async (req, res) => {
             }
           }
         }
+
+        if (cleanKit === 'N') {
+          // Anúncios sem kit são de produção local e não precisam de separação no almoxarifado
+          db.prepare(`
+            UPDATE pedidos_vendas 
+            SET status_picking = 'separado', separado_em = CURRENT_TIMESTAMP 
+            WHERE ml_item_id = ? AND status_picking = 'pendente'
+          `).run(cleanIdMl);
+        }
+
         db.exec('COMMIT');
       } catch (e) {
         db.exec('ROLLBACK');
@@ -1087,8 +1143,8 @@ const server = http.createServer(async (req, res) => {
 
       const stmtInsert = db.prepare(`
         INSERT OR REPLACE INTO pedidos_vendas 
-        (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ready_to_ship', 'pendente')
+        (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking, separado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ready_to_ship', ?, ?)
       `);
 
       for (const order of results) {
@@ -1131,6 +1187,11 @@ const server = http.createServer(async (req, res) => {
           const titleClean = rawTitle.slice(0, 150);
           const quantity = Math.max(1, Math.min(1000, parseInt(itemObj.quantity || 1, 10)));
 
+          // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
+          const adCheck = db.prepare("SELECT kit FROM anuncios WHERE id_ml = ?").get(mlItemId);
+          const initialStatus = (adCheck && adCheck.kit === 'N') ? 'separado' : 'pendente';
+          const separadoEm = (initialStatus === 'separado') ? new Date().toISOString() : null;
+
           stmtInsert.run(
             orderId,
             mlItemId,
@@ -1138,7 +1199,9 @@ const server = http.createServer(async (req, res) => {
             quantity,
             buyerClean.slice(0, 80),
             dateCreated,
-            envioTipo
+            envioTipo,
+            initialStatus,
+            separadoEm
           );
           savedCount++;
 
