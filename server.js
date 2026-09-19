@@ -787,6 +787,12 @@ const server = http.createServer(async (req, res) => {
               error: 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Clique em "Trocar Seller" para atualizar suas credenciais oficiais do Mercado Livre.'
             });
           }
+          if (orderRes.status === 403 && (orderData.code === 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES' || (orderData.message && orderData.message.includes('policy')))) {
+            logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).', req.socket.remoteAddress);
+            return sendJson(res, 403, {
+              error: 'Permissão de Vendas pendente (HTTP 403): O seu aplicativo no Mercado Livre Developers (App ID: ' + (appId || '1536131190806405') + ') foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'
+            });
+          }
           return sendJson(res, orderRes.status, { error: orderData.message || 'Erro na API do Mercado Livre ao sincronizar pedidos reais.' });
         }
         break;

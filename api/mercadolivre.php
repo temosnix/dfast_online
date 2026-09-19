@@ -174,6 +174,10 @@ class MercadoLivreClient {
             if ((isset($response['status']) && $response['status'] === 401) || str_contains($response['error'], '401') || str_contains($response['error'], 'unauthorized')) {
                 return ['error' => 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Atualize suas credenciais oficiais em "Trocar Seller".'];
             }
+            if ((isset($response['status']) && $response['status'] === 403) || str_contains(json_encode($response), 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES') || str_contains(json_encode($response), 'PolicyAgent')) {
+                $this->logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).');
+                return ['error' => 'Permissão de Vendas pendente (HTTP 403): Seu aplicativo no Mercado Livre Developers foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'];
+            }
             return $response;
         }
 
