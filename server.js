@@ -1061,7 +1061,7 @@ const server = http.createServer(async (req, res) => {
       async function fetchOrdersPage(offset) {
         let retries = 0;
         let backoffDelay = 1000;
-        const pageUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50&offset=${offset}`;
+        const pageUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.status=paid&shipping.status=ready_to_ship,pending&sort=date_desc&limit=50&offset=${offset}`;
 
         while (retries <= 3) {
           const orderRes = await fetch(pageUrl, {
@@ -1181,8 +1181,11 @@ const server = http.createServer(async (req, res) => {
       const stmtInsert = db.prepare(`
         INSERT OR REPLACE INTO pedidos_vendas 
         (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking, separado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'ready_to_ship', ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
+
+      const validOrderIds = new Set();
+      let skippedDeliveredCount = 0;
 
       db.exec('BEGIN TRANSACTION');
       try {
@@ -1191,11 +1194,14 @@ const server = http.createServer(async (req, res) => {
           const shipping = order.shipping || {};
           const shippingId = String(shipping.id || '');
           let envioTipo = (shipping.shipping_mode && (shipping.shipping_mode.includes('self_service') || shipping.shipping_mode.includes('turbo'))) ? 'flex' : 'coleta';
+          let envioStatus = 'ready_to_ship';
 
           // Verificação de modalidade real de logística com cache por shipping_id
           if (shippingId) {
             if (shipmentCache.has(shippingId)) {
-              envioTipo = shipmentCache.get(shippingId);
+              const cached = shipmentCache.get(shippingId);
+              envioTipo = cached.envioTipo;
+              envioStatus = cached.envioStatus;
             } else {
               try {
                 const shipRes = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
@@ -1211,13 +1217,22 @@ const server = http.createServer(async (req, res) => {
                   } else {
                     envioTipo = 'coleta';
                   }
-                  shipmentCache.set(shippingId, envioTipo);
+                  envioStatus = shipData.status || 'ready_to_ship';
+                  shipmentCache.set(shippingId, { envioTipo, envioStatus });
                 }
               } catch (e) {
                 // mantém fallback seguro
               }
             }
           }
+
+          // Blindagem estrita: descarta pedidos cujo envio já foi despachado (shipped) ou entregue (delivered)
+          if (envioStatus === 'shipped' || envioStatus === 'delivered' || (order.tags && order.tags.includes('delivered'))) {
+            skippedDeliveredCount++;
+            continue;
+          }
+
+          validOrderIds.add(orderId);
 
           const items = order.order_items || [];
           const firstName = (order.buyer && order.buyer.first_name) ? String(order.buyer.first_name).replace(/[^\p{L}\s]/gu, '') : '';
@@ -1231,10 +1246,20 @@ const server = http.createServer(async (req, res) => {
             const titleClean = rawTitle.slice(0, 150);
             const quantity = Math.max(1, Math.min(1000, parseInt(itemObj.quantity || 1, 10)));
 
-            // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
+            // Preservar status de separação existente caso o operador já tenha marcado no galpão
+            const existingOrder = db.prepare("SELECT status_picking, separado_em FROM pedidos_vendas WHERE order_id = ?").get(orderId);
             const adCheck = db.prepare("SELECT kit FROM anuncios WHERE id_ml = ?").get(mlItemId);
-            const initialStatus = (adCheck && adCheck.kit === 'N') ? 'separado' : 'pendente';
-            const separadoEm = (initialStatus === 'separado') ? new Date().toISOString() : null;
+            
+            let initialStatus = 'pendente';
+            let separadoEm = null;
+
+            if (existingOrder && existingOrder.status_picking) {
+              initialStatus = existingOrder.status_picking;
+              separadoEm = existingOrder.separado_em;
+            } else if (adCheck && adCheck.kit === 'N') {
+              initialStatus = 'separado';
+              separadoEm = new Date().toISOString();
+            }
 
             stmtInsert.run(
               orderId,
@@ -1244,6 +1269,7 @@ const server = http.createServer(async (req, res) => {
               buyerClean.slice(0, 80),
               dateCreated,
               envioTipo,
+              envioStatus,
               initialStatus,
               separadoEm
             );
@@ -1260,6 +1286,13 @@ const server = http.createServer(async (req, res) => {
             }
           }
         }
+
+        // Saneamento: remove da fila de picking pedidos que já saíram do galpão ou foram entregues
+        if (validOrderIds.size > 0) {
+          const placeholders = Array.from(validOrderIds).map(() => '?').join(',');
+          db.prepare(`DELETE FROM pedidos_vendas WHERE order_id NOT IN (${placeholders})`).run(...Array.from(validOrderIds));
+        }
+
         db.exec('COMMIT');
       } catch (errDb) {
         db.exec('ROLLBACK');
@@ -1271,7 +1304,7 @@ const server = http.createServer(async (req, res) => {
 
       logSecurityEvent(
         'ORDERS_SYNCED_SUCCESS',
-        `Sincronização paginada em tempo real: ${allResults.length} pedidos oficiais analisados em ${totalPages} página(s), ${savedCount} itens processados e ${unregisteredList.length} anúncios sem cadastro identificados.`,
+        `Sincronização com filtro de entrega: ${allResults.length} pedidos pendentes de envio analisados (${totalPages} página(s)), ${savedCount} itens salvos no picking, ${skippedDeliveredCount} pedidos entregues/despachados descartados e ${unregisteredList.length} anúncios sem cadastro identificados.`,
         req.socket.remoteAddress
       );
 
@@ -1281,6 +1314,7 @@ const server = http.createServer(async (req, res) => {
         total_orders: totalOrders || allResults.length,
         total_pages: Math.max(1, totalPages),
         items_imported: savedCount,
+        skipped_delivered_count: skippedDeliveredCount,
         unregistered_count: unregisteredList.length,
         unregistered_items: unregisteredList,
         message: allResults.length > 0

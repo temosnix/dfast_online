@@ -157,7 +157,7 @@ class MercadoLivreClient {
         $maxOrders = 2000;
 
         do {
-            $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit={$limit}&offset={$offset}";
+            $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.status=paid&shipping.status=ready_to_ship,pending&sort=date_desc&limit={$limit}&offset={$offset}";
 
             $response = $this->executeCurlWithBackoff('GET', $url, [], [
                 "Authorization: Bearer {$accessToken}"
@@ -213,6 +213,8 @@ class MercadoLivreClient {
         $savedCount = 0;
         $unregisteredMap = [];
         $shipmentCache = [];
+        $validOrderIds = [];
+        $skippedDeliveredCount = 0;
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO pedidos_vendas 
@@ -230,27 +232,43 @@ class MercadoLivreClient {
                 // Determinar modalidade de envio (Flex vs Coleta) com cache
                 $shippingMode = $shipping['shipping_mode'] ?? 'normal';
                 $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
+                $envioStatus = 'ready_to_ship';
 
                 // Se possuir envio identificado, verifica logistic_type real na API de envios
                 if (!empty($shippingId)) {
                     if (isset($shipmentCache[$shippingId])) {
-                        $envioTipo = $shipmentCache[$shippingId];
+                        $envioTipo = $shipmentCache[$shippingId]['envioTipo'];
+                        $envioStatus = $shipmentCache[$shippingId]['envioStatus'];
                     } else {
                         $shipmentData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}", [], [
                             "Authorization: Bearer {$accessToken}"
                         ]);
 
-                        if (!isset($shipmentData['error']) && !empty($shipmentData['logistic_type'])) {
-                            $logisticType = $shipmentData['logistic_type'];
-                            if ($logisticType === 'self_service' || str_contains($logisticType, 'turbo')) {
-                                $envioTipo = 'flex';
-                            } else {
-                                $envioTipo = 'coleta';
+                        if (!isset($shipmentData['error'])) {
+                            if (!empty($shipmentData['logistic_type'])) {
+                                $logisticType = $shipmentData['logistic_type'];
+                                if ($logisticType === 'self_service' || str_contains($logisticType, 'turbo')) {
+                                    $envioTipo = 'flex';
+                                } else {
+                                    $envioTipo = 'coleta';
+                                }
                             }
-                            $shipmentCache[$shippingId] = $envioTipo;
+                            $envioStatus = $shipmentData['status'] ?? 'ready_to_ship';
+                            $shipmentCache[$shippingId] = [
+                                'envioTipo' => $envioTipo,
+                                'envioStatus' => $envioStatus
+                            ];
                         }
                     }
                 }
+
+                // Blindagem estrita: descarta pedidos cujo envio já foi despachado (shipped) ou entregue (delivered)
+                if ($envioStatus === 'shipped' || $envioStatus === 'delivered' || (isset($order['tags']) && in_array('delivered', $order['tags']))) {
+                    $skippedDeliveredCount++;
+                    continue;
+                }
+
+                $validOrderIds[] = $orderId;
 
                 // Sanitização de dados de comprador (Minimização LGPD)
                 $firstName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['first_name'] ?? '');
@@ -267,12 +285,26 @@ class MercadoLivreClient {
                     $titleClean = substr($rawTitle, 0, 150);
                     $quantity = max(1, min(1000, (int)($itemObj['quantity'] ?? 1)));
 
+                    // Preservar status de picking existente se já alterado pelo operador
+                    $chkExisting = $this->pdo->prepare("SELECT status_picking, separado_em FROM pedidos_vendas WHERE order_id = ?");
+                    $chkExisting->execute([$orderId]);
+                    $existingOrder = $chkExisting->fetch();
+
                     // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
                     $adCheck = $this->pdo->prepare("SELECT kit FROM anuncios WHERE id_ml = ?");
                     $adCheck->execute([$mlItemId]);
                     $adRow = $adCheck->fetch();
-                    $initialStatus = ($adRow && $adRow['kit'] === 'N') ? 'separado' : 'pendente';
-                    $separadoEm = ($initialStatus === 'separado') ? date('Y-m-d H:i:s') : null;
+
+                    $initialStatus = 'pendente';
+                    $separadoEm = null;
+
+                    if ($existingOrder && !empty($existingOrder['status_picking'])) {
+                        $initialStatus = $existingOrder['status_picking'];
+                        $separadoEm = $existingOrder['separado_em'];
+                    } elseif ($adRow && $adRow['kit'] === 'N') {
+                        $initialStatus = 'separado';
+                        $separadoEm = date('Y-m-d H:i:s');
+                    }
 
                     $stmt->execute([
                         'order_id' => $orderId,
@@ -282,7 +314,7 @@ class MercadoLivreClient {
                         'comprador' => substr($buyerClean, 0, 80),
                         'data_venda' => $dateCreated,
                         'envio_tipo' => $envioTipo,
-                        'envio_status' => 'ready_to_ship',
+                        'envio_status' => $envioStatus,
                         'status_picking' => $initialStatus,
                         'separado_em' => $separadoEm,
                     ]);
@@ -300,6 +332,14 @@ class MercadoLivreClient {
                     }
                 }
             }
+
+            // Saneamento: remove do picking pedidos que já saíram do galpão ou foram entregues
+            if (!empty($validOrderIds)) {
+                $placeholders = implode(',', array_fill(0, count($validOrderIds), '?'));
+                $delStmt = $this->pdo->prepare("DELETE FROM pedidos_vendas WHERE order_id NOT IN ({$placeholders})");
+                $delStmt->execute($validOrderIds);
+            }
+
             $this->pdo->commit();
         } catch (Exception $e) {
             $this->pdo->rollBack();
@@ -311,7 +351,7 @@ class MercadoLivreClient {
 
         $this->logSecurityEvent(
             'ORDERS_SYNCED_SUCCESS', 
-            "Sincronização paginada em tempo real: " . count($allResults) . " pedidos oficiais analisados em {$totalPages} página(s), {$savedCount} itens processados e " . count($unregisteredList) . " anúncios sem cadastro identificados."
+            "Sincronização com filtro de entrega: " . count($allResults) . " pedidos pendentes analisados em {$totalPages} página(s), {$savedCount} itens salvos no picking, {$skippedDeliveredCount} entregues descartados e " . count($unregisteredList) . " anúncios sem cadastro identificados."
         );
 
         return [

@@ -536,6 +536,17 @@ export const PickingView: React.FC<PickingViewProps> = ({
                             </span>
                           )}
 
+                          {/* Shipping Status Badge */}
+                          {pedido.envio_status === 'ready_to_ship' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">
+                              ✓ Pronto p/ Envio
+                            </span>
+                          ) : pedido.envio_status === 'pending' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                              ⏳ Aguardando Liberação
+                            </span>
+                          ) : null}
+
                           {/* Box Badge / Unregistered Indicator */}
                           {pedido.cadastrado === false ? (
                             <button
