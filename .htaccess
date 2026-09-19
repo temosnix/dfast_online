@@ -6,6 +6,11 @@
     RewriteEngine On
     RewriteBase /
 
+    # Forçar HTTPS Seguro (Cadeado Verde SSL)
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
     # Bloqueio de arquivos confidenciais e bancos de dados
     RewriteRule \.(db|sqlite|sqlite3|env|lock|git)$ - [F,L]
     RewriteRule ^database/ - [F,L]
@@ -38,4 +43,12 @@ Options -Indexes
     ExpiresByType image/png "access plus 1 year"
     ExpiresByType text/css "access plus 1 month"
     ExpiresByType application/javascript "access plus 1 month"
+</IfModule>
+
+# Cabeçalhos de Segurança (HTTPS / SSL Hardening)
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "SAMEORIGIN"
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>
