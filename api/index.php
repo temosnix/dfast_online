@@ -347,25 +347,31 @@ try {
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/mercadolivre/config (Credenciais Mercado Livre)
+    // ROTA: /api/mercadolivre/config (Credenciais com Criptografia AES-256-GCM)
     // -------------------------------------------------------------
     if ($route === 'mercadolivre/config') {
+        require_once __DIR__ . '/crypto.php';
+
         if ($method === 'GET') {
             $configs = $pdo->query("SELECT chave, valor FROM ml_config")->fetchAll(PDO::FETCH_KEY_PAIR);
-            // Mascarar chaves secretas por segurança
-            $appId = $configs['ml_app_id'] ?? getenv('ML_APP_ID') ?: '';
-            $secret = $configs['ml_secret_key'] ?? getenv('ML_SECRET_KEY') ?: '';
-            $hasSecret = !empty($secret);
-            $sellerId = $configs['ml_seller_id'] ?? getenv('ML_SELLER_ID') ?: '';
-            $hasToken = !empty($configs['ml_access_token'] ?? getenv('ML_ACCESS_TOKEN'));
+            
+            // Descriptografar campos sensíveis com AES-256-GCM
+            $appId = CryptoService::decrypt($configs['ml_app_id'] ?? '') ?: getenv('ML_APP_ID') ?: '';
+            $secret = CryptoService::decrypt($configs['ml_secret_key'] ?? '') ?: getenv('ML_SECRET_KEY') ?: '';
+            $sellerId = CryptoService::decrypt($configs['ml_seller_id'] ?? '') ?: getenv('ML_SELLER_ID') ?: '';
+            $accessToken = CryptoService::decrypt($configs['ml_access_token'] ?? '') ?: getenv('ML_ACCESS_TOKEN') ?: '';
+            $refreshToken = CryptoService::decrypt($configs['ml_refresh_token'] ?? '') ?: getenv('ML_REFRESH_TOKEN') ?: '';
 
             echo json_encode([
                 'success' => true,
                 'config' => [
                     'app_id' => $appId,
-                    'has_secret' => $hasSecret,
+                    'has_secret' => !empty($secret),
                     'seller_id' => $sellerId,
-                    'connected' => $hasToken,
+                    'has_access_token' => !empty($accessToken),
+                    'has_refresh_token' => !empty($refreshToken),
+                    'connected' => !empty($accessToken),
+                    'encryption' => 'AES-256-GCM (AEAD Autenticado)',
                     'flex_cutoff' => $configs['flex_cutoff_hour'] ?? getenv('FLEX_CUTOFF_HOUR') ?: '14:00',
                     'coleta_cutoff' => $configs['coleta_cutoff_hour'] ?? getenv('COLETA_CUTOFF_HOUR') ?: '16:00',
                 ]
@@ -376,13 +382,33 @@ try {
         if ($method === 'POST') {
             $stmt = $pdo->prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
             
-            if (!empty($input['app_id'])) $stmt->execute(['ml_app_id', trim($input['app_id'])]);
-            if (!empty($input['secret_key'])) $stmt->execute(['ml_secret_key', trim($input['secret_key'])]);
-            if (!empty($input['seller_id'])) $stmt->execute(['ml_seller_id', trim($input['seller_id'])]);
-            if (!empty($input['flex_cutoff'])) $stmt->execute(['flex_cutoff_hour', trim($input['flex_cutoff'])]);
-            if (!empty($input['coleta_cutoff'])) $stmt->execute(['coleta_cutoff_hour', trim($input['coleta_cutoff'])]);
+            // Criptografar campos sensíveis antes de persistir no banco de dados SQLite
+            if (!empty($input['app_id'])) {
+                $stmt->execute(['ml_app_id', CryptoService::encrypt(trim($input['app_id']))]);
+            }
+            if (!empty($input['secret_key'])) {
+                $stmt->execute(['ml_secret_key', CryptoService::encrypt(trim($input['secret_key']))]);
+            }
+            if (!empty($input['seller_id'])) {
+                $stmt->execute(['ml_seller_id', CryptoService::encrypt(trim($input['seller_id']))]);
+            }
+            if (!empty($input['access_token'])) {
+                $stmt->execute(['ml_access_token', CryptoService::encrypt(trim($input['access_token']))]);
+            }
+            if (!empty($input['refresh_token'])) {
+                $stmt->execute(['ml_refresh_token', CryptoService::encrypt(trim($input['refresh_token']))]);
+            }
+            if (!empty($input['flex_cutoff'])) {
+                $stmt->execute(['flex_cutoff_hour', trim($input['flex_cutoff'])]);
+            }
+            if (!empty($input['coleta_cutoff'])) {
+                $stmt->execute(['coleta_cutoff_hour', trim($input['coleta_cutoff'])]);
+            }
 
-            echo json_encode(['success' => true, 'message' => 'Configurações salvas no banco com sucesso!']);
+            echo json_encode([
+                'success' => true, 
+                'message' => 'Credenciais criptografadas com AES-256-GCM e salvas no banco com sucesso!'
+            ]);
             exit;
         }
     }

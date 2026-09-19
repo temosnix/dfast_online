@@ -75,7 +75,10 @@ export interface MLConfig {
   app_id: string;
   has_secret: boolean;
   seller_id: string;
+  has_access_token?: boolean;
+  has_refresh_token?: boolean;
   connected: boolean;
+  encryption?: string;
   flex_cutoff: string;
   coleta_cutoff: string;
 }

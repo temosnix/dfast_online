@@ -7,6 +7,47 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
+const crypto = require('node:crypto');
+
+const CIPHER_ALGO = 'aes-256-gcm';
+const ENC_PREFIX = 'enc:v1:';
+
+function getMasterKey() {
+  const masterKey = process.env.APP_ENCRYPTION_KEY || 'dfast_online_master_aes256_key_sec_2026_hostgator';
+  return crypto.createHash('sha256').update(masterKey).digest();
+}
+
+function encryptField(plaintext) {
+  if (!plaintext) return plaintext;
+  if (typeof plaintext === 'string' && plaintext.startsWith(ENC_PREFIX)) return plaintext;
+  const key = getMasterKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv(CIPHER_ALGO, key, iv);
+  let ciphertext = cipher.update(String(plaintext), 'utf8');
+  ciphertext = Buffer.concat([ciphertext, cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const combined = Buffer.concat([iv, tag, ciphertext]);
+  return ENC_PREFIX + combined.toString('base64');
+}
+
+function decryptField(data) {
+  if (!data || typeof data !== 'string' || !data.startsWith(ENC_PREFIX)) return data;
+  try {
+    const raw = Buffer.from(data.slice(ENC_PREFIX.length), 'base64');
+    if (raw.length < 28) return data;
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const ciphertext = raw.subarray(28);
+    const key = getMasterKey();
+    const decipher = crypto.createDecipheriv(CIPHER_ALGO, key, iv);
+    decipher.setAuthTag(tag);
+    let decrypted = decipher.update(ciphertext, undefined, 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (err) {
+    return null;
+  }
+}
 
 // Carregar variáveis do .env se existir
 const envPath = path.join(__dirname, '.env');
@@ -77,7 +118,18 @@ try {
       SELECT id_nissi, 15, 5 FROM distribuidor;
     `);
   }
-  console.log('[Dfast Online] Banco SQLite inicializado com sucesso.');
+
+  // Migração de Criptografia Automática para Campos Sensíveis
+  const sensitiveKeys = ['ml_app_id', 'ml_secret_key', 'ml_seller_id', 'ml_access_token', 'ml_refresh_token'];
+  const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
+  const updateStmt = db.prepare("UPDATE ml_config SET valor = ?, atualizado_em = CURRENT_TIMESTAMP WHERE chave = ?");
+  for (const r of rows) {
+    if (sensitiveKeys.includes(r.chave) && r.valor && !r.valor.startsWith(ENC_PREFIX)) {
+      updateStmt.run(encryptField(r.valor), r.chave);
+    }
+  }
+
+  console.log('[Dfast Online] Banco SQLite inicializado e campos sensíveis protegidos com AES-256-GCM.');
 } catch (err) {
   console.error('[Dfast Online] Erro ao abrir SQLite:', err.message);
 }
@@ -403,20 +455,29 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 7. /api/mercadolivre/config
+  // 7. /api/mercadolivre/config (Credenciais com Criptografia AES-256-GCM)
   if (pathname === '/api/mercadolivre/config') {
     if (req.method === 'GET') {
       const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
       const configs = {};
       rows.forEach(r => { configs[r.chave] = r.valor; });
 
+      const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
+      const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+      const sellerId = decryptField(configs['ml_seller_id']) || process.env.ML_SELLER_ID || '';
+      const accessToken = decryptField(configs['ml_access_token']) || process.env.ML_ACCESS_TOKEN || '';
+      const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
+
       return sendJson(res, 200, {
         success: true,
         config: {
-          app_id: configs['ml_app_id'] || process.env.ML_APP_ID || '',
-          has_secret: !!(configs['ml_secret_key'] || process.env.ML_SECRET_KEY),
-          seller_id: configs['ml_seller_id'] || process.env.ML_SELLER_ID || '',
-          connected: !!(configs['ml_access_token'] || process.env.ML_ACCESS_TOKEN),
+          app_id: appId,
+          has_secret: !!secret,
+          seller_id: sellerId,
+          has_access_token: !!accessToken,
+          has_refresh_token: !!refreshToken,
+          connected: !!accessToken,
+          encryption: 'AES-256-GCM (AEAD Autenticado)',
           flex_cutoff: configs['flex_cutoff_hour'] || process.env.FLEX_CUTOFF_HOUR || '14:00',
           coleta_cutoff: configs['coleta_cutoff_hour'] || process.env.COLETA_CUTOFF_HOUR || '16:00',
         }
@@ -425,13 +486,18 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST') {
       const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
-      if (body.app_id) stmt.run('ml_app_id', body.app_id.trim());
-      if (body.secret_key) stmt.run('ml_secret_key', body.secret_key.trim());
-      if (body.seller_id) stmt.run('ml_seller_id', body.seller_id.trim());
+      if (body.app_id) stmt.run('ml_app_id', encryptField(body.app_id.trim()));
+      if (body.secret_key) stmt.run('ml_secret_key', encryptField(body.secret_key.trim()));
+      if (body.seller_id) stmt.run('ml_seller_id', encryptField(body.seller_id.trim()));
+      if (body.access_token) stmt.run('ml_access_token', encryptField(body.access_token.trim()));
+      if (body.refresh_token) stmt.run('ml_refresh_token', encryptField(body.refresh_token.trim()));
       if (body.flex_cutoff) stmt.run('flex_cutoff_hour', body.flex_cutoff.trim());
       if (body.coleta_cutoff) stmt.run('coleta_cutoff_hour', body.coleta_cutoff.trim());
 
-      return sendJson(res, 200, { success: true, message: 'Configurações salvas no banco com sucesso!' });
+      return sendJson(res, 200, {
+        success: true,
+        message: 'Credenciais criptografadas com AES-256-GCM e salvas no banco com sucesso!'
+      });
     }
   }
 

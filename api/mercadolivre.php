@@ -4,6 +4,8 @@
 // Compatível com HostGator Plano Turbo
 // ================================================================
 
+require_once __DIR__ . '/crypto.php';
+
 class MercadoLivreClient {
     private PDO $pdo;
     private string $appId;
@@ -14,8 +16,8 @@ class MercadoLivreClient {
         $this->pdo = $pdo;
         $configs = $this->pdo->query("SELECT chave, valor FROM ml_config")->fetchAll(PDO::FETCH_KEY_PAIR);
         
-        $this->appId = $configs['ml_app_id'] ?? getenv('ML_APP_ID') ?: '';
-        $this->secretKey = $configs['ml_secret_key'] ?? getenv('ML_SECRET_KEY') ?: '';
+        $this->appId = CryptoService::decrypt($configs['ml_app_id'] ?? '') ?: getenv('ML_APP_ID') ?: '';
+        $this->secretKey = CryptoService::decrypt($configs['ml_secret_key'] ?? '') ?: getenv('ML_SECRET_KEY') ?: '';
         $this->redirectUri = $configs['ml_redirect_uri'] ?? getenv('ML_REDIRECT_URI') ?: '';
     }
 

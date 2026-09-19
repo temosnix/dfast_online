@@ -115,6 +115,17 @@ function initSupplementaryTables(PDO $pdo): void {
         );
     ");
 
+    // Migração de Criptografia Automática para Campos Sensíveis
+    require_once __DIR__ . '/crypto.php';
+    $sensitiveKeys = ['ml_app_id', 'ml_secret_key', 'ml_seller_id', 'ml_access_token', 'ml_refresh_token'];
+    $rows = $pdo->query("SELECT chave, valor FROM ml_config")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $stmtUpdate = $pdo->prepare("UPDATE ml_config SET valor = ?, atualizado_em = CURRENT_TIMESTAMP WHERE chave = ?");
+    foreach ($sensitiveKeys as $k) {
+        if (!empty($rows[$k]) && !str_starts_with($rows[$k], 'enc:v1:')) {
+            $stmtUpdate->execute([CryptoService::encrypt($rows[$k]), $k]);
+        }
+    }
+
     // Auto-popular estoque_saldos para os itens do distribuidor se estiver vazio
     $count = $pdo->query("SELECT COUNT(*) FROM estoque_saldos")->fetchColumn();
     if ($count == 0) {

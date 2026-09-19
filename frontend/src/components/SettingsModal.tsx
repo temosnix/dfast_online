@@ -20,6 +20,8 @@ interface SettingsModalProps {
     app_id: string;
     secret_key: string;
     seller_id: string;
+    access_token: string;
+    refresh_token: string;
     flex_cutoff: string;
     coleta_cutoff: string;
   }) => Promise<void>;
@@ -35,6 +37,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     app_id: '',
     secret_key: '',
     seller_id: '',
+    access_token: '',
+    refresh_token: '',
     flex_cutoff: '14:00',
     coleta_cutoff: '16:00',
   });
@@ -47,6 +51,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         app_id: config.app_id || '',
         secret_key: '',
         seller_id: config.seller_id || '',
+        access_token: '',
+        refresh_token: '',
         flex_cutoff: config.flex_cutoff || '14:00',
         coleta_cutoff: config.coleta_cutoff || '16:00',
       });
@@ -137,6 +143,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               value={formData.seller_id}
               onChange={e => setFormData({ ...formData, seller_id: e.target.value })}
               placeholder="Ex: 123456789"
+              className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
+            />
+          </div>
+
+          {/* Access Token (Criptografado) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-300">
+                Access Token (ML):
+              </label>
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                AES-256-GCM
+              </span>
+            </div>
+            <input
+              type="password"
+              value={formData.access_token}
+              onChange={e => setFormData({ ...formData, access_token: e.target.value })}
+              placeholder={config?.has_access_token ? '•••••••••••••••••••••••• (Criptografado)' : 'Cole seu Access Token (opcional / preenchido via OAuth)'}
+              className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
+            />
+          </div>
+
+          {/* Refresh Token (Criptografado) */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-xs font-bold text-slate-300">
+                Refresh Token (ML):
+              </label>
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                AES-256-GCM
+              </span>
+            </div>
+            <input
+              type="password"
+              value={formData.refresh_token}
+              onChange={e => setFormData({ ...formData, refresh_token: e.target.value })}
+              placeholder={config?.has_refresh_token ? '•••••••••••••••••••••••• (Criptografado)' : 'Cole seu Refresh Token (opcional / renovado via OAuth)'}
               className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-sky-500 font-mono"
             />
           </div>
