@@ -33,6 +33,9 @@ class MercadoLivreClient {
      * Gera URL de autorização OAuth 2.0 com proteção contra CSRF (state randômico de 128-bit)
      */
     public function getAuthUrl(): string {
+        if (empty($this->appId) || $this->appId === '12345678901234') {
+            return '';
+        }
         $state = bin2hex(random_bytes(16));
         $stmt = $this->pdo->prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES ('ml_oauth_state', ?, CURRENT_TIMESTAMP)");
         $stmt->execute([$state]);
@@ -168,6 +171,9 @@ class MercadoLivreClient {
         }
 
         if (isset($response['error'])) {
+            if ((isset($response['status']) && $response['status'] === 401) || str_contains($response['error'], '401') || str_contains($response['error'], 'unauthorized')) {
+                return ['error' => 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Atualize suas credenciais oficiais em "Trocar Seller".'];
+            }
             return $response;
         }
 

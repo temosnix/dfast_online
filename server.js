@@ -529,6 +529,10 @@ const server = http.createServer(async (req, res) => {
       const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
       const redirectUri = configs['ml_redirect_uri'] || process.env.ML_REDIRECT_URI || `http://localhost:${PORT}/api/mercadolivre/callback`;
 
+      if (!appId || appId === '12345678901234') {
+        return sendJson(res, 400, { error: 'Por favor, informe seu App ID (Client ID) oficial do Mercado Livre no painel "Trocar Seller" antes de conectar via OAuth.' });
+      }
+
       const state = crypto.randomBytes(16).toString('hex');
       db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES ('ml_oauth_state', ?, CURRENT_TIMESTAMP)").run(state);
       logSecurityEvent('OAUTH_AUTH_URL_GENERATED', `State CSRF gerado: ${state}`, req.socket.remoteAddress);
@@ -777,6 +781,12 @@ const server = http.createServer(async (req, res) => {
 
         orderData = await orderRes.json();
         if (!orderRes.ok) {
+          if (orderRes.status === 401) {
+            logSecurityEvent('API_SYNC_UNAUTHORIZED', 'Requisição rejeitada pelo Mercado Livre (HTTP 401). Token ausente, inválido ou expirado.', req.socket.remoteAddress);
+            return sendJson(res, 401, {
+              error: 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Clique em "Trocar Seller" para atualizar suas credenciais oficiais do Mercado Livre.'
+            });
+          }
           return sendJson(res, orderRes.status, { error: orderData.message || 'Erro na API do Mercado Livre ao sincronizar pedidos reais.' });
         }
         break;
