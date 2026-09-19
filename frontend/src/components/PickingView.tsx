@@ -447,9 +447,20 @@ export const PickingView: React.FC<PickingViewProps> = ({
                               <span>⚠️ Sem Cadastro • Cadastrar</span>
                             </button>
                           ) : (
-                            <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-300 border border-purple-500/20 text-[11px] font-bold">
-                              Caixa {pedido.caixa || 'Padrão'}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-300 border border-purple-500/20 text-[11px] font-bold">
+                                Caixa {pedido.caixa || 'Padrão'}
+                              </span>
+                              {pedido.kit === 'N' ? (
+                                <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] font-bold">
+                                  🏭 Produção Local
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-sky-500/10 text-sky-400 border border-sky-500/20 text-[11px] font-bold">
+                                  📦 Kit Nissi
+                                </span>
+                              )}
+                            </div>
                           )}
 
                           <span className="text-xs text-slate-400 font-medium">
@@ -487,7 +498,10 @@ export const PickingView: React.FC<PickingViewProps> = ({
                   <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800/80">
                     <div className="flex items-center justify-between mb-2">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                        Componentes que compõem este anúncio ({pedido.componentes?.length || 0} itens):
+                        {pedido.kit === 'N' 
+                          ? 'Item de Fabricação Própria (Sem peças de almoxarifado):'
+                          : `Componentes que compõem este anúncio (${pedido.componentes?.length || 0} itens):`
+                        }
                       </p>
                       {pedido.cadastrado === false && (
                         <button
@@ -504,7 +518,20 @@ export const PickingView: React.FC<PickingViewProps> = ({
                         </button>
                       )}
                     </div>
-                    {(!pedido.componentes || pedido.componentes.length === 0) ? (
+                    {pedido.kit === 'N' ? (
+                      <div className="p-3.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-emerald-300">
+                        <div className="flex items-center gap-2.5">
+                          <span className="text-base">🏭</span>
+                          <div>
+                            <p className="font-bold text-white">Item Produzido no Local (Fabricação Própria)</p>
+                            <p className="text-[11px] text-slate-400">Não consome peças do almoxarifado Nissi. Embalar diretamente na <strong>Caixa {pedido.caixa || 'Padrão'}</strong>.</p>
+                          </div>
+                        </div>
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-xs font-bold shrink-0">
+                          {pedido.quantidade}x Produção Própria
+                        </span>
+                      </div>
+                    ) : (!pedido.componentes || pedido.componentes.length === 0) ? (
                       <div className="p-4 rounded-xl bg-amber-500/5 border border-dashed border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-300/90">
                         <div className="flex items-center gap-2">
                           <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />

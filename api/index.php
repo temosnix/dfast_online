@@ -577,6 +577,12 @@ try {
             exit;
         }
 
+        if ($kit === 'S' && (!is_array($componentes) || count($componentes) === 0)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Para anúncios com peças do distribuidor (Kit S), adicione pelo menos 1 componente Nissi.']);
+            exit;
+        }
+
         $pdo->beginTransaction();
         try {
             $stmt = $pdo->prepare("
@@ -592,10 +598,10 @@ try {
                 'caixa' => $caixa ?: '1'
             ]);
 
-            // Atualiza kits_anuncio
+            // Atualiza kits_anuncio (limpa qualquer registro anterior)
             $pdo->prepare("DELETE FROM kits_anuncio WHERE id_ml_anuncio = ?")->execute([$idMl]);
 
-            if (is_array($componentes) && count($componentes) > 0) {
+            if ($kit === 'S' && is_array($componentes) && count($componentes) > 0) {
                 $stmtComp = $pdo->prepare("INSERT INTO kits_anuncio (id_ml_anuncio, id_kit_nissi, qtd_kit) VALUES (?, ?, ?)");
                 foreach ($componentes as $c) {
                     if (!empty($c['id_kit_nissi'])) {
@@ -613,16 +619,17 @@ try {
             throw $e;
         }
 
+        $tipoDesc = ($kit === 'N') ? 'Sem Kit (Produção Local)' : 'Com Kit (' . count($componentes) . ' peças Nissi)';
         $logStmt = $pdo->prepare("INSERT INTO ml_audit_log (evento, detalhes, ip_origem) VALUES (?, ?, ?)");
         $logStmt->execute([
             'ANUNCIO_CADASTRADO',
-            "Anúncio MLB-{$idMl} cadastrado: Caixa {$caixa}, Kit {$kit}, " . count($componentes) . " componentes.",
+            "Anúncio MLB-{$idMl} cadastrado: Caixa {$caixa}, Tipo {$tipoDesc}.",
             $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1'
         ]);
 
         echo json_encode([
             'success' => true,
-            'message' => "Anúncio MLB-{$idMl} cadastrado com sucesso no banco de dados SQLite!"
+            'message' => "Anúncio MLB-{$idMl} cadastrado com sucesso (" . ($kit === 'N' ? 'Produção Local' : 'Com Kit Nissi') . ")!"
         ]);
         exit;
     }

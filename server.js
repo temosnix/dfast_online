@@ -712,6 +712,10 @@ const server = http.createServer(async (req, res) => {
       const cleanCaixa = String(caixa || '1').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
       const cleanKit = kit === 'N' ? 'N' : 'S';
 
+      if (cleanKit === 'S' && (!Array.isArray(componentes) || componentes.length === 0)) {
+        return sendJson(res, 400, { error: 'Para anúncios com peças do distribuidor (Kit S), adicione pelo menos 1 componente Nissi.' });
+      }
+
       db.exec('BEGIN TRANSACTION');
       try {
         db.prepare(`
@@ -724,7 +728,7 @@ const server = http.createServer(async (req, res) => {
 
         db.prepare("DELETE FROM kits_anuncio WHERE id_ml_anuncio = ?").run(cleanIdMl);
 
-        if (Array.isArray(componentes) && componentes.length > 0) {
+        if (cleanKit === 'S' && Array.isArray(componentes) && componentes.length > 0) {
           const stmtComp = db.prepare("INSERT INTO kits_anuncio (id_ml_anuncio, id_kit_nissi, qtd_kit) VALUES (?, ?, ?)");
           for (const c of componentes) {
             if (c.id_kit_nissi) {
@@ -740,11 +744,12 @@ const server = http.createServer(async (req, res) => {
         throw e;
       }
 
-      logSecurityEvent('ANUNCIO_CADASTRADO', `Anúncio MLB-${cleanIdMl} cadastrado: Caixa ${cleanCaixa}, Kit ${cleanKit}, ${componentes ? componentes.length : 0} componentes.`, req.socket.remoteAddress);
+      const tipoDesc = cleanKit === 'N' ? 'Sem Kit (Produção Local)' : `Com Kit (${componentes ? componentes.length : 0} peças Nissi)`;
+      logSecurityEvent('ANUNCIO_CADASTRADO', `Anúncio MLB-${cleanIdMl} cadastrado: Caixa ${cleanCaixa}, Tipo ${tipoDesc}.`, req.socket.remoteAddress);
 
       return sendJson(res, 200, {
         success: true,
-        message: `Anúncio MLB-${cleanIdMl} cadastrado com sucesso no banco de dados SQLite!`
+        message: `Anúncio MLB-${cleanIdMl} cadastrado com sucesso (${cleanKit === 'N' ? 'Produção Local' : 'Com Kit Nissi'})!`
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });

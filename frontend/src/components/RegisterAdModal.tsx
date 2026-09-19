@@ -115,8 +115,8 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
     e.preventDefault();
     if (!selectedAd) return;
 
-    if (componentes.length === 0) {
-      setErrorMessage('Adicione pelo menos 1 componente do Distribuidor Nissi a este anúncio.');
+    if (kit === 'S' && componentes.length === 0) {
+      setErrorMessage('Para anúncios com kit (peças Nissi), adicione pelo menos 1 componente.');
       return;
     }
 
@@ -130,11 +130,11 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
         body: JSON.stringify({
           id_ml: selectedAd.id_ml,
           caixa: caixa.trim(),
-          kit: componentes.length > 1 ? 'S' : kit,
-          componentes: componentes.map(c => ({
+          kit: kit,
+          componentes: kit === 'S' ? componentes.map(c => ({
             id_kit_nissi: c.id_kit_nissi,
             qtd_kit: c.qtd_kit,
-          })),
+          })) : [],
         }),
       });
 
@@ -283,51 +283,76 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
                   </div>
                 </div>
 
-                {/* Tipo de Produto / Kit */}
+                {/* Tipo de Produto / Origem: Kit (Peças Nissi) vs Sem Kit (Produção Local) */}
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    Tipo do Anúncio:
+                    Origem / Tipo do Anúncio:
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => setKit('S')}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 text-center ${
                         kit === 'S'
-                          ? 'bg-sky-500/20 border-sky-500 text-sky-300'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                          ? 'bg-sky-500/20 border-sky-500 text-sky-300 ring-1 ring-sky-500/40 shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
                       }`}
                     >
-                      <Layers className="w-4 h-4" />
-                      <span>Kit / Conjunto</span>
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Layers className="w-4 h-4 text-sky-400" />
+                        <span>Com Kit (Nissi)</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-normal">Contém peças do distribuidor</span>
                     </button>
                     <button
                       type="button"
-                      onClick={() => setKit('N')}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      onClick={() => {
+                        setKit('N');
+                        setComponentes([]);
+                      }}
+                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 text-center ${
                         kit === 'N'
-                          ? 'bg-sky-500/20 border-sky-500 text-sky-300'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500/40 shadow-sm'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800 hover:text-slate-200'
                       }`}
                     >
-                      <ShoppingBag className="w-4 h-4" />
-                      <span>Item Avulso</span>
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <Sparkles className="w-4 h-4 text-emerald-400" />
+                        <span>Sem Kit (No Local)</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-normal">Fabricado no galpão</span>
                     </button>
                   </div>
-                  <p className="text-[11px] text-slate-500 mt-2">
-                    {kit === 'S' ? 'Contém 1 ou mais peças do distribuidor' : 'Peça individual única'}
+                  <p className="text-[11px] text-slate-400 mt-2">
+                    {kit === 'S' 
+                      ? '📦 Flag [S]: O operador precisará retirar peças no almoxarifado Nissi.' 
+                      : '🏭 Flag [N]: O item é produzido internamente. Não consome peças do almoxarifado.'}
                   </p>
                 </div>
               </div>
 
-              {/* Seção de Componentes do Distribuidor Nissi */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-                    <span>Componentes do Estoque (Distribuidor Nissi):</span>
-                    <span className="text-[11px] text-emerald-400 font-semibold">({componentes.length} adicionados)</span>
-                  </label>
+              {/* Seção Condicional: Produção Local vs Componentes do Distribuidor Nissi */}
+              {kit === 'N' ? (
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900 to-slate-900 border border-emerald-500/30 space-y-2">
+                  <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
+                    <Sparkles className="w-4 h-4" />
+                    <span>Produto de Fabricação Própria (Produzido no Local - Kit 'N')</span>
+                  </div>
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Este anúncio está configurado como <strong className="text-emerald-400">Sem Kit (Flag 'N')</strong>. Os itens são produzidos internamente e <strong className="text-white">não requerem peças do Distribuidor Nissi</strong>.
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    Ao salvar, o anúncio será registrado para uso da <strong>Caixa {caixa || 'Padrão'}</strong> e liberado para expedição sem pendência de almoxarifado.
+                  </p>
                 </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                      <span>Componentes do Estoque (Distribuidor Nissi):</span>
+                      <span className="text-[11px] text-emerald-400 font-semibold">({componentes.length} adicionados)</span>
+                    </label>
+                  </div>
 
                 {/* Search / Add Component Input */}
                 <div className="relative">
@@ -437,6 +462,7 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Mensagens de Feedback */}
               {errorMessage && (
@@ -464,7 +490,7 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={saving || componentes.length === 0}
+                  disabled={saving || (kit === 'S' && componentes.length === 0)}
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-95 disabled:opacity-50"
                 >
                   <Check className="w-4 h-4" />
