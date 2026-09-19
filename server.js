@@ -109,6 +109,14 @@ try {
       valor TEXT,
       atualizado_em DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS ml_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      evento TEXT NOT NULL,
+      detalhes TEXT,
+      ip_origem TEXT,
+      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   const countRow = db.prepare("SELECT COUNT(*) as count FROM estoque_saldos").get();
@@ -132,6 +140,16 @@ try {
   console.log('[Dfast Online] Banco SQLite inicializado e campos sensíveis protegidos com AES-256-GCM.');
 } catch (err) {
   console.error('[Dfast Online] Erro ao abrir SQLite:', err.message);
+}
+
+function logSecurityEvent(event, details, ip = '127.0.0.1') {
+  try {
+    if (db) {
+      db.prepare("INSERT INTO ml_audit_log (evento, detalhes, ip_origem) VALUES (?, ?, ?)").run(event, details, ip);
+    }
+  } catch (e) {
+    // Silencioso para não interromper fluxo
+  }
 }
 
 // MIME types para arquivos estáticos
@@ -498,6 +516,302 @@ const server = http.createServer(async (req, res) => {
         success: true,
         message: 'Credenciais criptografadas com AES-256-GCM e salvas no banco com sucesso!'
       });
+    }
+  }
+
+  // 7.1 /api/mercadolivre/auth-url (OAuth 2.0 com State Anti-CSRF)
+  if (pathname === '/api/mercadolivre/auth-url' && req.method === 'GET') {
+    try {
+      const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
+      const configs = {};
+      rows.forEach(r => { configs[r.chave] = r.valor; });
+      const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
+      const redirectUri = configs['ml_redirect_uri'] || process.env.ML_REDIRECT_URI || `http://localhost:${PORT}/api/mercadolivre/callback`;
+
+      const state = crypto.randomBytes(16).toString('hex');
+      db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES ('ml_oauth_state', ?, CURRENT_TIMESTAMP)").run(state);
+      logSecurityEvent('OAUTH_AUTH_URL_GENERATED', `State CSRF gerado: ${state}`, req.socket.remoteAddress);
+
+      const encodedUri = encodeURIComponent(redirectUri);
+      const authUrl = `https://auth.mercadolivre.com.br/authorization?response_type=code&client_id=${appId}&redirect_uri=${encodedUri}&state=${state}`;
+
+      return sendJson(res, 200, { success: true, auth_url: authUrl });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 7.2 /api/mercadolivre/callback (Callback OAuth com Validação de State)
+  if (pathname === '/api/mercadolivre/callback') {
+    try {
+      const code = parsedUrl.searchParams.get('code') || body.code || '';
+      const state = parsedUrl.searchParams.get('state') || body.state || '';
+
+      if (!code) {
+        return sendJson(res, 400, { error: 'Código de autorização não informado.' });
+      }
+
+      const storedRow = db.prepare("SELECT valor FROM ml_config WHERE chave = 'ml_oauth_state'").get();
+      const storedState = storedRow ? storedRow.valor : '';
+
+      if (!storedState || storedState !== state) {
+        logSecurityEvent('OAUTH_CSRF_VALIDATION_FAILED', 'State recebido não coincide com o gerado.', req.socket.remoteAddress);
+        return sendJson(res, 403, { error: 'Falha de segurança: parâmetro state inválido ou expirado (Prevenção contra CSRF).' });
+      }
+
+      // Consumir state
+      db.prepare("DELETE FROM ml_config WHERE chave = 'ml_oauth_state'").run();
+      logSecurityEvent('OAUTH_CSRF_VALIDATION_SUCCESS', 'State CSRF validado com sucesso.', req.socket.remoteAddress);
+
+      const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
+      const configs = {};
+      rows.forEach(r => { configs[r.chave] = r.valor; });
+      const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
+      const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+      const redirectUri = configs['ml_redirect_uri'] || process.env.ML_REDIRECT_URI || `http://localhost:${PORT}/api/mercadolivre/callback`;
+
+      // Trocar code por tokens
+      const tokenRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+        },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: appId,
+          client_secret: secret,
+          code: code,
+          redirect_uri: redirectUri
+        })
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok || tokenData.error) {
+        logSecurityEvent('OAUTH_TOKEN_EXCHANGE_FAILED', JSON.stringify(tokenData), req.socket.remoteAddress);
+        return sendJson(res, tokenRes.status || 400, tokenData);
+      }
+
+      const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
+      if (tokenData.access_token) stmt.run('ml_access_token', encryptField(tokenData.access_token));
+      if (tokenData.refresh_token) stmt.run('ml_refresh_token', encryptField(tokenData.refresh_token));
+      if (tokenData.user_id) stmt.run('ml_seller_id', encryptField(String(tokenData.user_id)));
+      const expiresIn = tokenData.expires_in || 21600;
+      stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + expiresIn));
+
+      logSecurityEvent('OAUTH_TOKEN_EXCHANGED', 'Tokens gerados e salvos com AES-256-GCM.', req.socket.remoteAddress);
+
+      if (req.method === 'GET') {
+        res.writeHead(302, { Location: '/?ml_auth=success' });
+        res.end();
+        return;
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        message: 'Conta do Mercado Livre vinculada com sucesso! Tokens armazenados com criptografia AES-256-GCM.'
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 7.3 /api/mercadolivre/refresh (Renovação Manual / Preventiva de Token)
+  if (pathname === '/api/mercadolivre/refresh' && req.method === 'POST') {
+    try {
+      const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
+      const configs = {};
+      rows.forEach(r => { configs[r.chave] = r.valor; });
+      const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
+      const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+      const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
+
+      if (!refreshToken) {
+        return sendJson(res, 400, { error: 'Nenhum refresh token cadastrado ou ativo.' });
+      }
+
+      const tokenRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+        },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: appId,
+          client_secret: secret,
+          refresh_token: refreshToken
+        })
+      });
+
+      const tokenData = await tokenRes.json();
+      if (!tokenRes.ok || tokenData.error) {
+        logSecurityEvent('TOKEN_AUTO_REFRESH_FAILED', JSON.stringify(tokenData), req.socket.remoteAddress);
+        return sendJson(res, tokenRes.status || 400, tokenData);
+      }
+
+      const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
+      if (tokenData.access_token) stmt.run('ml_access_token', encryptField(tokenData.access_token));
+      if (tokenData.refresh_token) stmt.run('ml_refresh_token', encryptField(tokenData.refresh_token));
+      const expiresIn = tokenData.expires_in || 21600;
+      stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + expiresIn));
+
+      logSecurityEvent('TOKEN_AUTO_REFRESH_SUCCESS', 'Access Token renovado com sucesso.', req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        message: 'Tokens de acesso do Mercado Livre renovados com sucesso!'
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 7.4 /api/mercadolivre/sync (Sincronização Real de Pedidos com ML)
+  if (pathname === '/api/mercadolivre/sync' && req.method === 'POST') {
+    try {
+      const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
+      const configs = {};
+      rows.forEach(r => { configs[r.chave] = r.valor; });
+      const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
+      let accessToken = decryptField(configs['ml_access_token']) || process.env.ML_ACCESS_TOKEN || '';
+      const sellerId = decryptField(configs['ml_seller_id']) || process.env.ML_SELLER_ID || '';
+      const expiresAt = parseInt(configs['ml_token_expires_at'] || '0', 10);
+
+      if (!accessToken) {
+        return sendJson(res, 400, { error: 'Não autenticado no Mercado Livre ou token ausente. Configure suas credenciais.' });
+      }
+
+      // Se expirar em menos de 10 minutos (600s), renova preventivamente
+      if (expiresAt > 0 && (Math.floor(Date.now() / 1000) + 600 >= expiresAt)) {
+        const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+        const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
+        if (refreshToken) {
+          logSecurityEvent('TOKEN_PRE_EXPIRY_TRIGGERED', 'Token próximo de expirar. Disparando renovação automática.', req.socket.remoteAddress);
+          const rRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+            },
+            body: new URLSearchParams({
+              grant_type: 'refresh_token',
+              client_id: appId,
+              client_secret: secret,
+              refresh_token: refreshToken
+            })
+          });
+          const rData = await rRes.json();
+          if (rData.access_token) {
+            accessToken = rData.access_token;
+            const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
+            stmt.run('ml_access_token', encryptField(rData.access_token));
+            if (rData.refresh_token) stmt.run('ml_refresh_token', encryptField(rData.refresh_token));
+            stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + (rData.expires_in || 21600)));
+            logSecurityEvent('TOKEN_AUTO_REFRESH_SUCCESS', 'Token preventivamente renovado com sucesso.', req.socket.remoteAddress);
+          }
+        }
+      }
+
+      if (!sellerId) {
+        return sendJson(res, 400, { error: 'Seller ID não configurado no sistema.' });
+      }
+
+      const todayFrom = new Date();
+      todayFrom.setHours(0, 0, 0, 0);
+      const fromStr = todayFrom.toISOString();
+      const searchUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.date_created.from=${encodeURIComponent(fromStr)}&order.status=paid`;
+
+      // Chamada com retry e exponential backoff para HTTP 429
+      let retries = 0;
+      let backoffDelay = 1000;
+      let orderData = null;
+
+      while (retries <= 3) {
+        const orderRes = await fetch(searchUrl, {
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`,
+            'Accept': 'application/json'
+          }
+        });
+
+        if (orderRes.status === 429) {
+          retries++;
+          if (retries > 3) {
+            logSecurityEvent('RATE_LIMIT_EXCEEDED', 'Limite de requisições do Mercado Livre excedido após 3 tentativas.', req.socket.remoteAddress);
+            return sendJson(res, 429, { error: 'Limite de requisições da API do Mercado Livre atingido (HTTP 429). Tente novamente em alguns instantes.' });
+          }
+          logSecurityEvent('RATE_LIMIT_BACKOFF', `HTTP 429 detectado. Aguardando ${backoffDelay}ms antes da tentativa ${retries}...`, req.socket.remoteAddress);
+          await new Promise(r => setTimeout(r, backoffDelay));
+          backoffDelay *= 2;
+          continue;
+        }
+
+        orderData = await orderRes.json();
+        if (!orderRes.ok) {
+          return sendJson(res, orderRes.status, orderData);
+        }
+        break;
+      }
+
+      const results = (orderData && orderData.results) ? orderData.results : [];
+      let savedCount = 0;
+
+      const stmtInsert = db.prepare(`
+        INSERT OR REPLACE INTO pedidos_vendas 
+        (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'ready_to_ship', 'pendente')
+      `);
+
+      for (const order of results) {
+        const orderId = String(order.id).replace(/[^0-9]/g, '');
+        const items = order.order_items || [];
+        const firstName = (order.buyer && order.buyer.first_name) ? String(order.buyer.first_name).replace(/[^\p{L}\s]/gu, '') : '';
+        const lastName = (order.buyer && order.buyer.last_name) ? String(order.buyer.last_name).replace(/[^\p{L}\s]/gu, '') : '';
+        const buyerClean = `${firstName} ${lastName}`.trim() || 'Cliente Mercado Livre';
+        const dateCreated = order.date_created || new Date().toISOString();
+        const shippingMode = (order.shipping && order.shipping.shipping_mode) ? order.shipping.shipping_mode : 'normal';
+        const envioTipo = (shippingMode.includes('self_service') || shippingMode.includes('turbo')) ? 'flex' : 'coleta';
+
+        for (const itemObj of items) {
+          const mlItemId = String((itemObj.item && itemObj.item.id) || '').replace(/[^0-9]/g, '');
+          const rawTitle = String((itemObj.item && itemObj.item.title) || 'Item ML').replace(/<[^>]*>?/gm, '');
+          const titleClean = rawTitle.slice(0, 150);
+          const quantity = Math.max(1, Math.min(1000, parseInt(itemObj.quantity || 1, 10)));
+
+          stmtInsert.run(
+            orderId,
+            mlItemId,
+            titleClean,
+            quantity,
+            buyerClean.slice(0, 80),
+            dateCreated,
+            envioTipo
+          );
+          savedCount++;
+        }
+      }
+
+      logSecurityEvent('ORDERS_SYNCED_SUCCESS', `Sincronizados ${results.length} pedidos e ${savedCount} itens com sucesso.`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        orders_found: results.length,
+        items_imported: savedCount
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 7.5 /api/mercadolivre/audit-logs (Trilha de Auditoria de Segurança)
+  if (pathname === '/api/mercadolivre/audit-logs' && req.method === 'GET') {
+    try {
+      const logs = db.prepare("SELECT * FROM ml_audit_log ORDER BY id DESC LIMIT 50").all();
+      return sendJson(res, 200, { success: true, total: logs.length, logs });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
     }
   }
 

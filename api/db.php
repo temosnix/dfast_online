@@ -115,6 +115,17 @@ function initSupplementaryTables(PDO $pdo): void {
         );
     ");
 
+    // Tabela de Auditoria de Segurança para Eventos do Mercado Livre (LGPD & Security Compliance)
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS ml_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            evento TEXT NOT NULL,
+            detalhes TEXT,
+            ip_origem TEXT,
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    ");
+
     // Migração de Criptografia Automática para Campos Sensíveis
     require_once __DIR__ . '/crypto.php';
     $sensitiveKeys = ['ml_app_id', 'ml_secret_key', 'ml_seller_id', 'ml_access_token', 'ml_refresh_token'];

@@ -414,6 +414,108 @@ try {
     }
 
     // -------------------------------------------------------------
+    // ROTA: /api/mercadolivre/auth-url (OAuth 2.0 com State Anti-CSRF)
+    // -------------------------------------------------------------
+    if ($route === 'mercadolivre/auth-url' && $method === 'GET') {
+        require_once __DIR__ . '/mercadolivre.php';
+        $client = new MercadoLivreClient($pdo);
+        $authUrl = $client->getAuthUrl();
+        echo json_encode([
+            'success' => true,
+            'auth_url' => $authUrl
+        ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/mercadolivre/callback (Callback OAuth com Validação de State)
+    // -------------------------------------------------------------
+    if ($route === 'mercadolivre/callback') {
+        require_once __DIR__ . '/mercadolivre.php';
+        $client = new MercadoLivreClient($pdo);
+        $code = $_GET['code'] ?? $input['code'] ?? '';
+        $state = $_GET['state'] ?? $input['state'] ?? '';
+
+        if (empty($code)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Código de autorização não informado.']);
+            exit;
+        }
+
+        if (empty($state) || !$client->validateState($state)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Falha de segurança: parâmetro state inválido ou expirado (Prevenção contra CSRF).']);
+            exit;
+        }
+
+        $res = $client->exchangeCode($code);
+        if (isset($res['error'])) {
+            http_response_code(400);
+            echo json_encode($res);
+            exit;
+        }
+
+        if ($method === 'GET') {
+            header('Location: /?ml_auth=success');
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => 'Conta do Mercado Livre vinculada com sucesso! Tokens armazenados com criptografia AES-256-GCM.'
+        ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/mercadolivre/refresh (Renovação Manual / Preventiva de Token)
+    // -------------------------------------------------------------
+    if ($route === 'mercadolivre/refresh' && $method === 'POST') {
+        require_once __DIR__ . '/mercadolivre.php';
+        $client = new MercadoLivreClient($pdo);
+        $res = $client->refreshToken();
+        if (isset($res['error'])) {
+            http_response_code(400);
+            echo json_encode($res);
+            exit;
+        }
+        echo json_encode([
+            'success' => true,
+            'message' => 'Tokens de acesso do Mercado Livre renovados com sucesso!'
+        ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/mercadolivre/sync (Sincronização Real de Pedidos com ML)
+    // -------------------------------------------------------------
+    if ($route === 'mercadolivre/sync' && $method === 'POST') {
+        require_once __DIR__ . '/mercadolivre.php';
+        $client = new MercadoLivreClient($pdo);
+        $res = $client->syncTodayOrders();
+        if (isset($res['error'])) {
+            http_response_code(400);
+            echo json_encode($res);
+            exit;
+        }
+        echo json_encode($res);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/mercadolivre/audit-logs (Trilha de Auditoria de Segurança)
+    // -------------------------------------------------------------
+    if ($route === 'mercadolivre/audit-logs' && $method === 'GET') {
+        $logs = $pdo->query("SELECT * FROM ml_audit_log ORDER BY id DESC LIMIT 50")->fetchAll();
+        echo json_encode([
+            'success' => true,
+            'total' => count($logs),
+            'logs' => $logs
+        ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
     // ROTA: /api/mercadolivre/simulate (Simulador com 767 Anúncios Reais)
     // -------------------------------------------------------------
     if ($route === 'mercadolivre/simulate' && $method === 'POST') {
