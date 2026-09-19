@@ -124,3 +124,11 @@ export interface AuditLog {
   ip_origem: string;
   criado_em: string;
 }
+
+export interface User {
+  id: number;
+  username: string;
+  nome: string;
+  role: 'master' | 'basico';
+}
+

@@ -49,6 +49,66 @@ function decryptField(data) {
   }
 }
 
+// Funções de Autenticação e Segurança (RBAC)
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const iterations = 100000;
+  const hash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex');
+  return `pbkdf2:sha256:${iterations}:${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored || typeof stored !== 'string') return false;
+  const parts = stored.split(':');
+  if (parts.length === 5 && parts[0] === 'pbkdf2') {
+    const iterations = parseInt(parts[2], 10);
+    const salt = parts[3];
+    const originalHash = parts[4];
+    const checkHash = crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex');
+    return crypto.timingSafeEqual(Buffer.from(originalHash, 'hex'), Buffer.from(checkHash, 'hex'));
+  }
+  return false;
+}
+
+function createSessionToken(user) {
+  const payload = {
+    id: user.id,
+    username: user.username,
+    nome: user.nome,
+    role: user.role,
+    exp: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 dias de validade
+  };
+  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = crypto.createHmac('sha256', getMasterKey()).update(data).digest('base64url');
+  return `${data}.${sig}`;
+}
+
+function verifySessionToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [data, sig] = parts;
+  try {
+    const expectedSig = crypto.createHmac('sha256', getMasterKey()).update(data).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) return null;
+    const payload = JSON.parse(Buffer.from(data, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() > payload.exp) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+function getAuthenticatedUser(req) {
+  const authHeader = req.headers['authorization'];
+  if (!authHeader) return null;
+  const parts = authHeader.split(' ');
+  if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+    return verifySessionToken(parts[1]);
+  }
+  return null;
+}
+
 // Carregar variáveis do .env se existir
 const envPath = path.join(__dirname, '.env');
 if (fs.existsSync(envPath)) {
@@ -119,7 +179,54 @@ try {
       ip_origem TEXT,
       criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS usuarios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      nome TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('master', 'basico')),
+      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+      ultimo_login DATETIME
+    );
   `);
+
+  // Inicialização e Sincronização dos Usuários Padrão (RBAC)
+  try {
+    const masterExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('daniloivanoff')").get();
+    if (!masterExists) {
+      db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
+        'daniloivanoff',
+        'Danilo Ivanoff',
+        hashPassword('D4n1l002!@!'),
+        'master'
+      );
+      console.log('[Dfast Online] Usuário Master "daniloivanoff" criado com sucesso.');
+    } else {
+      db.prepare("UPDATE usuarios SET nome = 'Danilo Ivanoff', password_hash = ?, role = 'master' WHERE id = ?").run(
+        hashPassword('D4n1l002!@!'),
+        masterExists.id
+      );
+    }
+
+    const basicoExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('dfast')").get();
+    if (!basicoExists) {
+      db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
+        'dfast',
+        'Operador Dfast',
+        hashPassword('dfast355'),
+        'basico'
+      );
+      console.log('[Dfast Online] Usuário Básico "dfast" criado com sucesso.');
+    } else {
+      db.prepare("UPDATE usuarios SET nome = 'Operador Dfast', password_hash = ?, role = 'basico' WHERE id = ?").run(
+        hashPassword('dfast355'),
+        basicoExists.id
+      );
+    }
+  } catch (e) {
+    console.warn('[Dfast Online] Inicialização de usuários:', e.message);
+  }
 
   // Migração de colunas para SLA em pedidos_vendas
   try {
@@ -193,6 +300,16 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
+function requireMaster(req, res, pathname) {
+  const user = getAuthenticatedUser(req);
+  if (!user || user.role !== 'master') {
+    logSecurityEvent('AUTH_FORBIDDEN', `Acesso negado para usuário ${user ? `"${user.username}" (${user.role})` : 'não autenticado'} na rota ${pathname}`, req.socket.remoteAddress);
+    sendJson(res, 403, { success: false, error: 'Acesso negado: Operação permitida apenas para o perfil Master.' });
+    return false;
+  }
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   // CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -230,6 +347,69 @@ const server = http.createServer(async (req, res) => {
   // ==========================================
   // ROTAS DA API
   // ==========================================
+
+  // 0.1 /api/auth/login
+  if (pathname === '/api/auth/login' && req.method === 'POST') {
+    try {
+      const username = String(body.username || '').trim();
+      const password = String(body.password || '');
+
+      if (!username || !password) {
+        return sendJson(res, 400, { success: false, error: 'Informe o usuário e a senha.' });
+      }
+
+      const user = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER(?)").get(username);
+      if (!user || !verifyPassword(password, user.password_hash)) {
+        logSecurityEvent('AUTH_LOGIN_FAILED', `Tentativa de login falha para usuário "${username}"`, req.socket.remoteAddress);
+        return sendJson(res, 401, { success: false, error: 'Usuário ou senha incorretos.' });
+      }
+
+      db.prepare("UPDATE usuarios SET ultimo_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
+      const token = createSessionToken(user);
+      logSecurityEvent('AUTH_LOGIN_SUCCESS', `Usuário "${user.username}" logado com perfil [${user.role}]`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        token,
+        user: {
+          id: user.id,
+          username: user.username,
+          nome: user.nome,
+          role: user.role,
+        }
+      });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, error: err.message });
+    }
+  }
+
+  // 0.2 /api/auth/me
+  if (pathname === '/api/auth/me' && req.method === 'GET') {
+    try {
+      const authUser = getAuthenticatedUser(req);
+      if (!authUser) {
+        return sendJson(res, 401, { success: false, error: 'Sessão inválida ou expirada.' });
+      }
+
+      const user = db.prepare("SELECT id, username, nome, role FROM usuarios WHERE id = ?").get(authUser.id);
+      if (!user) {
+        return sendJson(res, 401, { success: false, error: 'Usuário não encontrado.' });
+      }
+
+      return sendJson(res, 200, { success: true, user });
+    } catch (err) {
+      return sendJson(res, 500, { success: false, error: err.message });
+    }
+  }
+
+  // 0.3 /api/auth/logout
+  if (pathname === '/api/auth/logout' && req.method === 'POST') {
+    const authUser = getAuthenticatedUser(req);
+    if (authUser) {
+      logSecurityEvent('AUTH_LOGOUT', `Usuário "${authUser.username}" encerrou a sessão`, req.socket.remoteAddress);
+    }
+    return sendJson(res, 200, { success: true, message: 'Logout realizado com sucesso.' });
+  }
 
   // 1. /api/stats
   if (pathname === '/api/stats' && req.method === 'GET') {
@@ -455,6 +635,7 @@ const server = http.createServer(async (req, res) => {
 
   // 3. /api/picking/toggle
   if (pathname === '/api/picking/toggle' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const orderId = body.order_id;
       if (!orderId) {
@@ -551,6 +732,7 @@ const server = http.createServer(async (req, res) => {
 
   // 5.1 /api/stock/create (Cadastrar Novo Item no Catálogo Nissi)
   if (pathname === '/api/stock/create' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const { id_nissi, descricao, unidade_medida, local, saldo_atual, estoque_minimo } = body;
       if (!id_nissi || !String(id_nissi).trim()) {
@@ -602,6 +784,7 @@ const server = http.createServer(async (req, res) => {
 
   // 5.2 /api/stock/update (Atualizar Item Completo ou Saldo/Local)
   if (pathname === '/api/stock/update' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const { id_nissi, descricao, unidade_medida, saldo_atual, estoque_minimo, local } = body;
       if (!id_nissi) {
@@ -658,6 +841,7 @@ const server = http.createServer(async (req, res) => {
 
   // 5.3 /api/stock/adjust (Ajuste Rápido de Saldo +1 / -1 / +X / -X)
   if (pathname === '/api/stock/adjust' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const { id_nissi, delta, motivo } = body;
       if (!id_nissi) {
@@ -706,6 +890,7 @@ const server = http.createServer(async (req, res) => {
 
   // 5.4 /api/stock/delete (Excluir Item do Catálogo com Proteção de Vínculos)
   if (pathname === '/api/stock/delete' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const { id_nissi, force } = body;
       if (!id_nissi) {
@@ -833,6 +1018,7 @@ const server = http.createServer(async (req, res) => {
 
   // 6.2 /api/anuncios/cadastrar (Cadastrar Caixa e Componentes Nissi do Anúncio)
   if (pathname === '/api/anuncios/cadastrar' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const { id_ml, caixa, kit, componentes } = body;
       if (!id_ml) {
@@ -927,6 +1113,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST') {
+      if (!requireMaster(req, res, pathname)) return;
       const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
       if (body.app_id) stmt.run('ml_app_id', encryptField(body.app_id.trim()));
       if (body.secret_key) stmt.run('ml_secret_key', encryptField(body.secret_key.trim()));
@@ -1097,6 +1284,7 @@ const server = http.createServer(async (req, res) => {
 
   // 7.4 /api/mercadolivre/sync (Sincronização Real de Pedidos com ML)
   if (pathname === '/api/mercadolivre/sync' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const rows = db.prepare("SELECT chave, valor FROM ml_config").all();
       const configs = {};
@@ -1438,6 +1626,7 @@ const server = http.createServer(async (req, res) => {
 
   // 7.5 /api/mercadolivre/audit-logs (Trilha de Auditoria de Segurança)
   if (pathname === '/api/mercadolivre/audit-logs' && req.method === 'GET') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       const logs = db.prepare("SELECT * FROM ml_audit_log ORDER BY id DESC LIMIT 50").all();
       return sendJson(res, 200, { success: true, total: logs.length, logs });
@@ -1448,6 +1637,7 @@ const server = http.createServer(async (req, res) => {
 
   // 9. /api/orders/reset
   if (pathname === '/api/orders/reset' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
     try {
       db.prepare("DELETE FROM pedidos_vendas").run();
       return sendJson(res, 200, { success: true, message: 'Fila de pedidos limpa com sucesso!' });

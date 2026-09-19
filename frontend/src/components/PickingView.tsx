@@ -35,6 +35,7 @@ interface PickingViewProps {
   availableSlas?: SlaOption[];
   selectedSla?: string;
   onChangeSla?: (sla: string) => void;
+  isMaster?: boolean;
 }
 
 export const PickingView: React.FC<PickingViewProps> = ({
@@ -52,6 +53,7 @@ export const PickingView: React.FC<PickingViewProps> = ({
   availableSlas = [],
   selectedSla = 'todos',
   onChangeSla,
+  isMaster = true,
 }) => {
   const [viewMode, setViewMode] = useState<'rota' | 'pedidos'>('rota');
   const [filterType, setFilterType] = useState<'all' | 'flex' | 'coleta'>('all');
@@ -659,16 +661,26 @@ export const PickingView: React.FC<PickingViewProps> = ({
                         <p className="text-xl font-extrabold text-sky-400">{pedido.quantidade} un</p>
                       </div>
 
-                      <button
-                        onClick={() => onToggleStatus(pedido.order_id)}
-                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                      {isMaster ? (
+                        <button
+                          onClick={() => onToggleStatus(pedido.order_id)}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            isSeparado
+                              ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
+                          }`}
+                        >
+                          {isSeparado ? 'Desmarcar' : 'Marcar Separado'}
+                        </button>
+                      ) : (
+                        <span className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
                           isSeparado
-                            ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                            : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
-                        }`}
-                      >
-                        {isSeparado ? 'Desmarcar' : 'Marcar Separado'}
-                      </button>
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                        }`}>
+                          {isSeparado ? '✓ Separado' : '⏳ Pendente'}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -681,7 +693,7 @@ export const PickingView: React.FC<PickingViewProps> = ({
                           : `Componentes que compõem este anúncio (${pedido.componentes?.length || 0} itens):`
                         }
                       </p>
-                      {pedido.cadastrado === false && (
+                      {isMaster && pedido.cadastrado === false && (
                         <button
                           type="button"
                           onClick={() => onOpenRegisterModal?.({
@@ -689,7 +701,7 @@ export const PickingView: React.FC<PickingViewProps> = ({
                             titulo: pedido.titulo,
                             total_pedidos: 1
                           })}
-                          className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline flex items-center gap-1"
+                          className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline flex items-center gap-1 cursor-pointer"
                         >
                           <PlusCircle className="w-3.5 h-3.5" />
                           Configurar Peças e Caixa

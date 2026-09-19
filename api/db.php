@@ -124,10 +124,47 @@ function initSupplementaryTables(PDO $pdo): void {
             ip_origem TEXT,
             criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            nome TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('master', 'basico')),
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            ultimo_login DATETIME
+        );
     ");
 
-    // Migração de Criptografia Automática para Campos Sensíveis
+    // Inicialização e Sincronização dos Usuários Padrão (RBAC)
     require_once __DIR__ . '/crypto.php';
+    try {
+        $masterStmt = $pdo->prepare("SELECT id FROM usuarios WHERE LOWER(username) = LOWER('daniloivanoff')");
+        $masterStmt->execute();
+        $masterId = $masterStmt->fetchColumn();
+        if (!$masterId) {
+            $pdo->prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)")
+                ->execute(['daniloivanoff', 'Danilo Ivanoff', CryptoService::hashPassword('D4n1l002!@!'), 'master']);
+        } else {
+            $pdo->prepare("UPDATE usuarios SET nome = 'Danilo Ivanoff', password_hash = ?, role = 'master' WHERE id = ?")
+                ->execute([CryptoService::hashPassword('D4n1l002!@!'), $masterId]);
+        }
+
+        $basicoStmt = $pdo->prepare("SELECT id FROM usuarios WHERE LOWER(username) = LOWER('dfast')");
+        $basicoStmt->execute();
+        $basicoId = $basicoStmt->fetchColumn();
+        if (!$basicoId) {
+            $pdo->prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)")
+                ->execute(['dfast', 'Operador Dfast', CryptoService::hashPassword('dfast355'), 'basico']);
+        } else {
+            $pdo->prepare("UPDATE usuarios SET nome = 'Operador Dfast', password_hash = ?, role = 'basico' WHERE id = ?")
+                ->execute([CryptoService::hashPassword('dfast355'), $basicoId]);
+        }
+    } catch (Exception $e) {
+        // Silencioso
+    }
+
+    // Migração de Criptografia Automática para Campos Sensíveis
     $sensitiveKeys = ['ml_app_id', 'ml_secret_key', 'ml_seller_id', 'ml_access_token', 'ml_refresh_token'];
     $rows = $pdo->query("SELECT chave, valor FROM ml_config")->fetchAll(PDO::FETCH_KEY_PAIR);
     $stmtUpdate = $pdo->prepare("UPDATE ml_config SET valor = ?, atualizado_em = CURRENT_TIMESTAMP WHERE chave = ?");

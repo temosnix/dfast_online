@@ -28,6 +28,7 @@ interface StockViewProps {
   onRefresh: () => void;
   showNotification: (message: string, type?: 'success' | 'error') => void;
   loading: boolean;
+  isMaster?: boolean;
 }
 
 type SortField = 'id_nissi' | 'descricao' | 'local' | 'saldo_atual' | 'total_anuncios_vinculados';
@@ -39,7 +40,8 @@ export const StockView: React.FC<StockViewProps> = ({
   metrics,
   onRefresh, 
   showNotification,
-  loading 
+  loading,
+  isMaster = true
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -343,14 +345,16 @@ export const StockView: React.FC<StockViewProps> = ({
             </div>
           )}
 
-          {/* "+ Novo Item" Button */}
-          <button
-            onClick={handleOpenCreate}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all active:scale-95 cursor-pointer ml-auto"
-          >
-            <Plus className="w-4 h-4 stroke-[2.5]" />
-            <span>Novo Item</span>
-          </button>
+          {/* "+ Novo Item" Button (Exclusivo Master) */}
+          {isMaster && (
+            <button
+              onClick={handleOpenCreate}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all active:scale-95 cursor-pointer ml-auto"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Novo Item</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -462,7 +466,7 @@ export const StockView: React.FC<StockViewProps> = ({
                   </th>
 
                   {/* Ações */}
-                  <th className="py-3.5 px-4 text-right">Ações</th>
+                  {isMaster && <th className="py-3.5 px-4 text-right">Ações</th>}
                 </tr>
               </thead>
 
@@ -501,40 +505,50 @@ export const StockView: React.FC<StockViewProps> = ({
                         {item.unidade_medida || 'UN'}
                       </td>
 
-                      {/* Saldo Físico com Botões de Ajuste Rápido */}
+                      {/* Saldo Físico */}
                       <td className="py-4 px-4 text-center whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800">
-                          {/* Botão -1 */}
-                          <button
-                            type="button"
-                            disabled={isAdjusting || item.saldo_atual <= 0}
-                            onClick={() => handleQuickAdjust(item, -1)}
-                            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-30 cursor-pointer"
-                            title="Subtrair 1 unidade do estoque físico"
-                          >
-                            <MinusCircle className="w-4 h-4 text-slate-400 hover:text-rose-400 transition-colors" />
-                          </button>
+                        {isMaster ? (
+                          <div className="inline-flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+                            {/* Botão -1 */}
+                            <button
+                              type="button"
+                              disabled={isAdjusting || item.saldo_atual <= 0}
+                              onClick={() => handleQuickAdjust(item, -1)}
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-30 cursor-pointer"
+                              title="Subtrair 1 unidade do estoque físico"
+                            >
+                              <MinusCircle className="w-4 h-4 text-slate-400 hover:text-rose-400 transition-colors" />
+                            </button>
 
-                          {/* Saldo Badge */}
-                          <span className={`px-2.5 py-0.5 rounded-lg font-black text-xs min-w-[50px] text-center ${
+                            {/* Saldo Badge */}
+                            <span className={`px-2.5 py-0.5 rounded-lg font-black text-xs min-w-[50px] text-center ${
+                              isLowStock
+                                ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            }`}>
+                              {item.saldo_atual} un
+                            </span>
+
+                            {/* Botão +1 */}
+                            <button
+                              type="button"
+                              disabled={isAdjusting}
+                              onClick={() => handleQuickAdjust(item, 1)}
+                              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-30 cursor-pointer"
+                              title="Adicionar 1 unidade ao estoque físico"
+                            >
+                              <PlusCircle className="w-4 h-4 text-slate-400 hover:text-emerald-400 transition-colors" />
+                            </button>
+                          </div>
+                        ) : (
+                          <span className={`inline-block px-3 py-1 rounded-lg font-black text-xs text-center ${
                             isLowStock
                               ? 'bg-red-500/20 text-red-300 border border-red-500/40'
                               : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                           }`}>
                             {item.saldo_atual} un
                           </span>
-
-                          {/* Botão +1 */}
-                          <button
-                            type="button"
-                            disabled={isAdjusting}
-                            onClick={() => handleQuickAdjust(item, 1)}
-                            className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors disabled:opacity-30 cursor-pointer"
-                            title="Adicionar 1 unidade ao estoque físico"
-                          >
-                            <PlusCircle className="w-4 h-4 text-slate-400 hover:text-emerald-400 transition-colors" />
-                          </button>
-                        </div>
+                        )}
                       </td>
 
                       {/* Estoque Mínimo */}
@@ -550,26 +564,28 @@ export const StockView: React.FC<StockViewProps> = ({
                       </td>
 
                       {/* Ações (Editar & Excluir) */}
-                      <td className="py-4 px-4 text-right whitespace-nowrap">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => handleOpenEdit(item)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold transition-all cursor-pointer"
-                            title="Editar peça completa"
-                          >
-                            <Edit3 className="w-3.5 h-3.5 text-sky-400" />
-                            <span>Editar</span>
-                          </button>
+                      {isMaster && (
+                        <td className="py-4 px-4 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleOpenEdit(item)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold transition-all cursor-pointer"
+                              title="Editar peça completa"
+                            >
+                              <Edit3 className="w-3.5 h-3.5 text-sky-400" />
+                              <span>Editar</span>
+                            </button>
 
-                          <button
-                            onClick={() => handleOpenDelete(item)}
-                            className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/30 transition-all cursor-pointer"
-                            title="Excluir peça do catálogo"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
+                            <button
+                              onClick={() => handleOpenDelete(item)}
+                              className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 border border-slate-700 hover:border-rose-500/30 transition-all cursor-pointer"
+                              title="Excluir peça do catálogo"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -579,33 +595,37 @@ export const StockView: React.FC<StockViewProps> = ({
         )}
       </div>
 
-      {/* 4. Modals */}
-      <StockModal
-        isOpen={isModalOpen}
-        mode={modalMode}
-        item={selectedItem}
-        onClose={() => {
-          setIsModalOpen(false);
-          setSelectedItem(null);
-        }}
-        onSuccess={(msg) => {
-          showNotification(msg);
-          onRefresh();
-        }}
-      />
+      {/* 4. Modals (Exclusivos Master) */}
+      {isMaster && (
+        <>
+          <StockModal
+            isOpen={isModalOpen}
+            mode={modalMode}
+            item={selectedItem}
+            onClose={() => {
+              setIsModalOpen(false);
+              setSelectedItem(null);
+            }}
+            onSuccess={(msg) => {
+              showNotification(msg);
+              onRefresh();
+            }}
+          />
 
-      <StockDeleteModal
-        isOpen={isDeleteOpen}
-        item={itemToDelete}
-        onClose={() => {
-          setIsDeleteOpen(false);
-          setItemToDelete(null);
-        }}
-        onSuccess={(msg) => {
-          showNotification(msg);
-          onRefresh();
-        }}
-      />
+          <StockDeleteModal
+            isOpen={isDeleteOpen}
+            item={itemToDelete}
+            onClose={() => {
+              setIsDeleteOpen(false);
+              setItemToDelete(null);
+            }}
+            onSuccess={(msg) => {
+              showNotification(msg);
+              onRefresh();
+            }}
+          />
+        </>
+      )}
     </div>
   );
 };

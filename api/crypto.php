@@ -90,4 +90,83 @@ class CryptoService {
 
         return $plaintext !== false ? $plaintext : null;
     }
+
+    public static function hashPassword(string $password): string {
+        $salt = bin2hex(random_bytes(16));
+        $iterations = 100000;
+        $hash = hash_pbkdf2('sha256', $password, $salt, $iterations, 64);
+        return "pbkdf2:sha256:{$iterations}:{$salt}:{$hash}";
+    }
+
+    public static function verifyPassword(string $password, ?string $stored): bool {
+        if (empty($stored)) return false;
+        $parts = explode(':', $stored);
+        if (count($parts) === 5 && $parts[0] === 'pbkdf2') {
+            $iterations = (int)$parts[2];
+            $salt = $parts[3];
+            $originalHash = $parts[4];
+            $checkHash = hash_pbkdf2('sha256', $password, $salt, $iterations, 64);
+            return hash_equals($originalHash, $checkHash);
+        }
+        return false;
+    }
+
+    public static function createSessionToken(array $user): string {
+        $payload = [
+            'id' => $user['id'],
+            'username' => $user['username'],
+            'nome' => $user['nome'],
+            'role' => $user['role'],
+            'exp' => (time() + 7 * 24 * 60 * 60) * 1000
+        ];
+        $json = json_encode($payload);
+        $data = rtrim(strtr(base64_encode($json), '+/', '-_'), '=');
+        $sigRaw = hash_hmac('sha256', $data, self::getMasterKey(), true);
+        $sig = rtrim(strtr(base64_encode($sigRaw), '+/', '-_'), '=');
+        return "{$data}.{$sig}";
+    }
+
+    public static function verifySessionToken(?string $token): ?array {
+        if (empty($token) || !str_contains($token, '.')) return null;
+        $parts = explode('.', $token, 2);
+        if (count($parts) !== 2) return null;
+        list($data, $sig) = $parts;
+
+        $expectedSigRaw = hash_hmac('sha256', $data, self::getMasterKey(), true);
+        $expectedSig = rtrim(strtr(base64_encode($expectedSigRaw), '+/', '-_'), '=');
+        if (!hash_equals($expectedSig, $sig)) return null;
+
+        $json = base64_decode(strtr($data, '-_', '+/'));
+        if (!$json) return null;
+        $payload = json_decode($json, true);
+        if (!$payload || !isset($payload['exp'])) return null;
+        if ((time() * 1000) > $payload['exp']) return null;
+
+        return $payload;
+    }
+
+    public static function getAuthenticatedUser(): ?array {
+        $headers = function_exists('getallheaders') ? getallheaders() : [];
+        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        if (empty($authHeader)) return null;
+        $parts = explode(' ', $authHeader, 2);
+        if (count($parts) === 2 && strtolower($parts[0]) === 'bearer') {
+            return self::verifySessionToken($parts[1]);
+        }
+        return null;
+    }
+
+    public static function requireMaster(): ?array {
+        $user = self::getAuthenticatedUser();
+        if (!$user || ($user['role'] ?? '') !== 'master') {
+            http_response_code(403);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Acesso negado: Operação permitida apenas para o perfil Master.'
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        return $user;
+    }
 }
+

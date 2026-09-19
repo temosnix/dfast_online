@@ -56,6 +56,72 @@ if (in_array($method, ['POST', 'PUT'])) {
 
 try {
     // -------------------------------------------------------------
+    // ROTAS DE AUTENTICAÇÃO E CONTROLE DE ACESSO (RBAC)
+    // -------------------------------------------------------------
+    if ($route === 'auth/login' && $method === 'POST') {
+        $username = trim($input['username'] ?? '');
+        $password = (string)($input['password'] ?? '');
+
+        if (empty($username) || empty($password)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Informe o usuário e a senha.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER(?)");
+        $stmt->execute([$username]);
+        $user = $stmt->fetch();
+
+        if (!$user || !CryptoService::verifyPassword($password, $user['password_hash'])) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Usuário ou senha incorretos.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $pdo->prepare("UPDATE usuarios SET ultimo_login = CURRENT_TIMESTAMP WHERE id = ?")->execute([$user['id']]);
+        $token = CryptoService::createSessionToken($user);
+
+        echo json_encode([
+            'success' => true,
+            'token' => $token,
+            'user' => [
+                'id' => (int)$user['id'],
+                'username' => $user['username'],
+                'nome' => $user['nome'],
+                'role' => $user['role']
+            ]
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($route === 'auth/me' && $method === 'GET') {
+        $authUser = CryptoService::getAuthenticatedUser();
+        if (!$authUser) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Sessão inválida ou expirada.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("SELECT id, username, nome, role FROM usuarios WHERE id = ?");
+        $stmt->execute([$authUser['id']]);
+        $user = $stmt->fetch();
+
+        if (!$user) {
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Usuário não encontrado.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        echo json_encode(['success' => true, 'user' => $user], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    if ($route === 'auth/logout' && $method === 'POST') {
+        echo json_encode(['success' => true, 'message' => 'Logout realizado com sucesso.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // -------------------------------------------------------------
     // ROTA: /api/stats (Estatísticas do Painel)
     // -------------------------------------------------------------
     if ($route === 'stats' && $method === 'GET') {
@@ -229,6 +295,7 @@ try {
     // ROTA: /api/picking/toggle (Alternar Status de Separação)
     // -------------------------------------------------------------
     if ($route === 'picking/toggle' && $method === 'POST') {
+        CryptoService::requireMaster();
         $orderId = $input['order_id'] ?? '';
         if (!$orderId) {
             http_response_code(400);
@@ -334,6 +401,7 @@ try {
     // ROTA: /api/stock/create (Cadastrar Novo Item no Catálogo Nissi)
     // -------------------------------------------------------------
     if ($route === 'stock/create' && $method === 'POST') {
+        CryptoService::requireMaster();
         $idNissi = isset($input['id_nissi']) ? strtoupper(trim(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $input['id_nissi']))) : '';
         $descricao = isset($input['descricao']) ? trim(strip_tags($input['descricao'])) : '';
         $unidade = (isset($input['unidade_medida']) && strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE';
@@ -384,6 +452,7 @@ try {
     // ROTA: /api/stock/update (Atualizar Item Completo ou Saldo/Local)
     // -------------------------------------------------------------
     if ($route === 'stock/update' && $method === 'POST') {
+        CryptoService::requireMaster();
         $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
         $descricao = isset($input['descricao']) ? trim(strip_tags($input['descricao'])) : null;
         $unidade = isset($input['unidade_medida']) ? ((strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE') : null;
@@ -444,6 +513,7 @@ try {
     // ROTA: /api/stock/adjust (Ajuste Rápido de Saldo +1 / -1 / +X / -X)
     // -------------------------------------------------------------
     if ($route === 'stock/adjust' && $method === 'POST') {
+        CryptoService::requireMaster();
         $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
         $delta = isset($input['delta']) ? (int)$input['delta'] : 0;
 
@@ -490,6 +560,7 @@ try {
     // ROTA: /api/stock/delete (Excluir Item do Catálogo com Proteção)
     // -------------------------------------------------------------
     if ($route === 'stock/delete' && $method === 'POST') {
+        CryptoService::requireMaster();
         $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
         $force = !empty($input['force']);
 
@@ -615,6 +686,7 @@ try {
     // ROTA: /api/anuncios/cadastrar (Cadastrar Caixa e Componentes Nissi do Anúncio)
     // -------------------------------------------------------------
     if ($route === 'anuncios/cadastrar' && $method === 'POST') {
+        CryptoService::requireMaster();
         $idMl = isset($input['id_ml']) ? preg_replace('/[^0-9]/', '', trim($input['id_ml'])) : '';
         $caixa = isset($input['caixa']) ? preg_replace('/[^a-zA-Z0-9_\-\s]/', '', trim($input['caixa'])) : '1';
         $kit = (isset($input['kit']) && $input['kit'] === 'N') ? 'N' : 'S';
@@ -728,6 +800,7 @@ try {
         }
 
         if ($method === 'POST') {
+            CryptoService::requireMaster();
             $stmt = $pdo->prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
             
             // Criptografar campos sensíveis antes de persistir no banco de dados SQLite
@@ -838,6 +911,7 @@ try {
     // ROTA: /api/mercadolivre/sync (Sincronização Real de Pedidos com ML)
     // -------------------------------------------------------------
     if ($route === 'mercadolivre/sync' && $method === 'POST') {
+        CryptoService::requireMaster();
         require_once __DIR__ . '/mercadolivre.php';
         $client = new MercadoLivreClient($pdo);
         $res = $client->syncTodayOrders();
@@ -854,6 +928,7 @@ try {
     // ROTA: /api/mercadolivre/audit-logs (Trilha de Auditoria de Segurança)
     // -------------------------------------------------------------
     if ($route === 'mercadolivre/audit-logs' && $method === 'GET') {
+        CryptoService::requireMaster();
         $logs = $pdo->query("SELECT * FROM ml_audit_log ORDER BY id DESC LIMIT 50")->fetchAll();
         echo json_encode([
             'success' => true,
@@ -867,6 +942,7 @@ try {
     // ROTA: /api/orders/reset (Limpar Pedidos)
     // -------------------------------------------------------------
     if ($route === 'orders/reset' && $method === 'POST') {
+        CryptoService::requireMaster();
         $pdo->exec("DELETE FROM pedidos_vendas");
         echo json_encode(['success' => true, 'message' => 'Fila de pedidos limpa com sucesso!']);
         exit;

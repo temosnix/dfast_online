@@ -6,6 +6,7 @@ import { PurchaseView } from './components/PurchaseView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuditModal } from './components/AuditModal';
 import { RegisterAdModal } from './components/RegisterAdModal';
+import { LoginView } from './components/LoginView';
 import { 
   Stats, 
   Pedido, 
@@ -17,11 +18,16 @@ import {
   MLConfig,
   UnregisteredAd,
   PickingCounts,
-  SlaOption
+  SlaOption,
+  User
 } from './types';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
 export default function App() {
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('dfast_auth_token'));
+  const [authChecking, setAuthChecking] = useState(true);
+
   const [activeTab, setActiveTab] = useState<'picking' | 'stock' | 'purchases'>('picking');
   const [stats, setStats] = useState<Stats | null>(null);
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
@@ -39,7 +45,7 @@ export default function App() {
   const [availableSlas, setAvailableSlas] = useState<SlaOption[]>([]);
   const [pickingCounts, setPickingCounts] = useState<PickingCounts>({ nissi: 0, producao: 0, todos: 0 });
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuditOpen, setIsAuditOpen] = useState(false);
@@ -47,24 +53,98 @@ export default function App() {
   const [selectedAdToRegister, setSelectedAdToRegister] = useState<UnregisteredAd | undefined>(undefined);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const isMaster = currentUser?.role === 'master';
+
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4000);
   };
 
+  // Helper para requisições autenticadas
+  const authFetch = (url: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers || {});
+    const token = authToken || localStorage.getItem('dfast_auth_token');
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    return fetch(url, { ...options, headers });
+  };
+
+  // 1. Verificação inicial de sessão
+  useEffect(() => {
+    const verifyExistingAuth = async () => {
+      const token = localStorage.getItem('dfast_auth_token');
+      if (!token) {
+        setAuthChecking(false);
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.user) {
+            setCurrentUser(data.user);
+            setAuthToken(token);
+          } else {
+            localStorage.removeItem('dfast_auth_token');
+            setAuthToken(null);
+            setCurrentUser(null);
+          }
+        } else {
+          localStorage.removeItem('dfast_auth_token');
+          setAuthToken(null);
+          setCurrentUser(null);
+        }
+      } catch (err) {
+        console.error('Falha ao verificar autenticação:', err);
+      } finally {
+        setAuthChecking(false);
+      }
+    };
+
+    verifyExistingAuth();
+  }, []);
+
+  const handleLoginSuccess = (user: User, token: string) => {
+    localStorage.setItem('dfast_auth_token', token);
+    setAuthToken(token);
+    setCurrentUser(user);
+    if (user.role === 'basico' && activeTab === 'purchases') {
+      setActiveTab('picking');
+    }
+    showNotification(`Bem-vindo, ${user.nome}! Conectado como ${user.role}.`);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await authFetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      // Silencioso
+    }
+    localStorage.removeItem('dfast_auth_token');
+    setAuthToken(null);
+    setCurrentUser(null);
+    showNotification('Sessão encerrada com sucesso.');
+  };
+
   const handleOpenRegisterModal = (ad?: UnregisteredAd) => {
+    if (!isMaster) return;
     setSelectedAdToRegister(ad);
     setIsRegisterOpen(true);
   };
 
   const loadData = async (tipo: 'nissi' | 'producao' | 'todos' = tipoOrigem, sla: string = selectedSla) => {
+    setLoading(true);
     try {
       const [statsRes, pickingRes, mlConfigRes, unregRes, stockRes] = await Promise.all([
-        fetch('/api/stats'),
-        fetch(`/api/picking?tipo=${tipo}&sla=${sla}`),
-        fetch('/api/mercadolivre/config'),
-        fetch('/api/anuncios/unregistered'),
-        fetch('/api/stock'),
+        authFetch('/api/stats'),
+        authFetch(`/api/picking?tipo=${tipo}&sla=${sla}`),
+        authFetch('/api/mercadolivre/config'),
+        authFetch('/api/anuncios/unregistered'),
+        authFetch('/api/stock'),
       ]);
 
       if (statsRes.ok) {
@@ -105,7 +185,7 @@ export default function App() {
 
   const loadStock = async () => {
     try {
-      const res = await fetch('/api/stock');
+      const res = await authFetch('/api/stock');
       if (res.ok) {
         const d = await res.json();
         setStock(d.stock || []);
@@ -117,8 +197,9 @@ export default function App() {
   };
 
   const loadPurchases = async () => {
+    if (!isMaster) return;
     try {
-      const res = await fetch('/api/purchases');
+      const res = await authFetch('/api/purchases');
       if (res.ok) {
         const d = await res.json();
         setPurchases(d.itens || []);
@@ -130,20 +211,24 @@ export default function App() {
     }
   };
 
+  // Carregar dados quando o usuário estiver autenticado
   useEffect(() => {
-    loadData();
-  }, []);
+    if (currentUser) {
+      loadData();
+    }
+  }, [currentUser]);
 
   useEffect(() => {
+    if (!currentUser) return;
     if (activeTab === 'stock') loadStock();
-    if (activeTab === 'purchases') loadPurchases();
+    if (activeTab === 'purchases' && isMaster) loadPurchases();
     if (activeTab === 'picking') loadData();
   }, [activeTab]);
 
   const handleChangeTipoOrigem = async (novoTipo: 'nissi' | 'producao' | 'todos') => {
     setTipoOrigem(novoTipo);
     try {
-      const pickingRes = await fetch(`/api/picking?tipo=${novoTipo}&sla=${selectedSla}`);
+      const pickingRes = await authFetch(`/api/picking?tipo=${novoTipo}&sla=${selectedSla}`);
       if (pickingRes.ok) {
         const d = await pickingRes.json();
         setPedidos(d.pedidos || []);
@@ -160,7 +245,7 @@ export default function App() {
   const handleChangeSla = async (novoSla: string) => {
     setSelectedSla(novoSla);
     try {
-      const pickingRes = await fetch(`/api/picking?tipo=${tipoOrigem}&sla=${novoSla}`);
+      const pickingRes = await authFetch(`/api/picking?tipo=${tipoOrigem}&sla=${novoSla}`);
       if (pickingRes.ok) {
         const d = await pickingRes.json();
         setPedidos(d.pedidos || []);
@@ -175,14 +260,21 @@ export default function App() {
   };
 
   const handleToggleStatus = async (orderId: string) => {
+    if (!isMaster) {
+      showNotification('Apenas usuários Master podem alterar o status do pedido.', 'error');
+      return;
+    }
     try {
-      const res = await fetch('/api/picking/toggle', {
+      const res = await authFetch('/api/picking/toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_id: orderId }),
       });
       if (res.ok) {
         loadData(tipoOrigem);
+      } else {
+        const d = await res.json();
+        showNotification(d.error || 'Falha ao alternar status do pedido', 'error');
       }
     } catch (err) {
       showNotification('Falha ao alternar status do pedido', 'error');
@@ -190,8 +282,9 @@ export default function App() {
   };
 
   const handleUpdateStock = async (idNissi: string, saldo: number, minimo: number, local: string) => {
+    if (!isMaster) return;
     try {
-      const res = await fetch('/api/stock/update', {
+      const res = await authFetch('/api/stock/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -204,6 +297,9 @@ export default function App() {
       if (res.ok) {
         showNotification(`Item ${idNissi} atualizado com sucesso!`);
         loadStock();
+      } else {
+        const d = await res.json();
+        showNotification(d.error || 'Erro ao salvar dados de estoque', 'error');
       }
     } catch (err) {
       showNotification('Erro ao salvar dados de estoque', 'error');
@@ -211,9 +307,10 @@ export default function App() {
   };
 
   const handleSyncML = async () => {
+    if (!isMaster) return;
     setSyncing(true);
     try {
-      const res = await fetch('/api/mercadolivre/sync', { method: 'POST' });
+      const res = await authFetch('/api/mercadolivre/sync', { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
         if (data.unregistered_count > 0) {
@@ -234,37 +331,61 @@ export default function App() {
   };
 
   const handleResetOrders = async () => {
+    if (!isMaster) return;
     if (!confirm('Deseja realmente limpar todos os pedidos da lista do dia?')) return;
     try {
-      await fetch('/api/orders/reset', { method: 'POST' });
-      showNotification('Fila de pedidos limpa com sucesso!');
-      loadData();
+      const res = await authFetch('/api/orders/reset', { method: 'POST' });
+      if (res.ok) {
+        showNotification('Fila de pedidos limpa com sucesso!');
+        loadData();
+      }
     } catch (err) {
       showNotification('Erro ao limpar pedidos', 'error');
     }
   };
 
   const handleSaveConfig = async (form: any) => {
-    const res = await fetch('/api/mercadolivre/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    });
-    if (res.ok) {
-      showNotification('Credenciais salvas com segurança no banco!');
-      loadData();
-    } else {
+    if (!isMaster) return;
+    try {
+      const res = await authFetch('/api/mercadolivre/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      if (res.ok) {
+        showNotification('Credenciais salvas com segurança no banco!');
+        loadData();
+      } else {
+        const d = await res.json();
+        showNotification(d.error || 'Erro ao salvar credenciais', 'error');
+      }
+    } catch (err) {
       showNotification('Erro ao salvar credenciais', 'error');
     }
   };
+
+  // Se estiver verificando autenticação na inicialização
+  if (authChecking) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400">
+        <Loader2 className="w-10 h-10 animate-spin text-sky-400 mb-4" />
+        <p className="text-sm font-medium">Verificando sessão de acesso...</p>
+      </div>
+    );
+  }
+
+  // Se não estiver autenticado, exibe a tela de Login moderna
+  if (!currentUser) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        openSettings={() => setIsSettingsOpen(true)}
-        onOpenAudit={() => setIsAuditOpen(true)}
+        openSettings={() => isMaster && setIsSettingsOpen(true)}
+        onOpenAudit={() => isMaster && setIsAuditOpen(true)}
         mlConfig={mlConfig}
         onSyncML={handleSyncML}
         onResetOrders={handleResetOrders}
@@ -272,6 +393,8 @@ export default function App() {
         flexCutoff={mlConfig?.flex_cutoff || '14:00'}
         unregisteredCount={unregisteredAds.length}
         onOpenRegisterModal={() => handleOpenRegisterModal()}
+        currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       {/* Floating Notification */}
@@ -292,7 +415,7 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {loading ? (
+        {loading && !pedidos.length && !stock.length ? (
           <div className="flex flex-col items-center justify-center py-24 text-slate-500">
             <Loader2 className="w-8 h-8 animate-spin text-sky-400 mb-3" />
             <p className="text-sm font-medium">Carregando dados do estoque...</p>
@@ -315,6 +438,7 @@ export default function App() {
                 availableSlas={availableSlas}
                 selectedSla={selectedSla}
                 onChangeSla={handleChangeSla}
+                isMaster={isMaster}
               />
             )}
 
@@ -325,10 +449,11 @@ export default function App() {
                 onRefresh={loadStock}
                 showNotification={showNotification}
                 loading={loading}
+                isMaster={isMaster}
               />
             )}
 
-            {activeTab === 'purchases' && (
+            {activeTab === 'purchases' && isMaster && (
               <PurchaseView
                 purchases={purchases}
                 distribuidorNome={distribuidorNome}
@@ -340,36 +465,38 @@ export default function App() {
         )}
       </main>
 
-      {/* Settings Modal */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        config={mlConfig}
-        onOpenAudit={() => setIsAuditOpen(true)}
-        onSaveConfig={handleSaveConfig}
-      />
+      {/* Modals - Exclusivos Master */}
+      {isMaster && (
+        <>
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            config={mlConfig}
+            onOpenAudit={() => setIsAuditOpen(true)}
+            onSaveConfig={handleSaveConfig}
+          />
 
-      {/* Security Audit Modal */}
-      <AuditModal
-        isOpen={isAuditOpen}
-        onClose={() => setIsAuditOpen(false)}
-      />
+          <AuditModal
+            isOpen={isAuditOpen}
+            onClose={() => setIsAuditOpen(false)}
+          />
 
-      {/* Register Ad & Parts Mapping Modal */}
-      <RegisterAdModal
-        isOpen={isRegisterOpen}
-        onClose={() => {
-          setIsRegisterOpen(false);
-          setSelectedAdToRegister(undefined);
-        }}
-        unregisteredAds={unregisteredAds}
-        initialAd={selectedAdToRegister}
-        stockList={stock}
-        onAdRegistered={() => {
-          loadData();
-          showNotification('Anúncio cadastrado e integrado com sucesso!');
-        }}
-      />
+          <RegisterAdModal
+            isOpen={isRegisterOpen}
+            onClose={() => {
+              setIsRegisterOpen(false);
+              setSelectedAdToRegister(undefined);
+            }}
+            unregisteredAds={unregisteredAds}
+            initialAd={selectedAdToRegister}
+            stockList={stock}
+            onAdRegistered={() => {
+              loadData();
+              showNotification('Anúncio cadastrado e integrado com sucesso!');
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }
