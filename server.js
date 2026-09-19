@@ -1057,89 +1057,126 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      // Busca pedidos reais pagos que ainda não foram entregues (regras do repositório BD-APP)
-      const searchUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50`;
+      // Função com retry e exponential backoff para HTTP 429 e auto-refresh para HTTP 401
+      async function fetchOrdersPage(offset) {
+        let retries = 0;
+        let backoffDelay = 1000;
+        const pageUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50&offset=${offset}`;
 
-      // Chamada com retry e exponential backoff para HTTP 429
-      let retries = 0;
-      let backoffDelay = 1000;
-      let orderData = null;
+        while (retries <= 3) {
+          const orderRes = await fetch(pageUrl, {
+            headers: {
+              'Authorization': `Bearer ${accessToken}`,
+              'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`,
+              'Accept': 'application/json'
+            }
+          });
 
-      while (retries <= 3) {
-        const orderRes = await fetch(searchUrl, {
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`,
-            'Accept': 'application/json'
-          }
-        });
-
-        // Se retornar 401, tenta auto-renovação e repete
-        if (orderRes.status === 401) {
-          const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
-          const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
-          if (refreshToken && retries === 0) {
-            retries++;
-            logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado. Renovando token via refresh_token.', req.socket.remoteAddress);
-            const rRes = await fetch('https://api.mercadolibre.com/oauth/token', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
-              },
-              body: new URLSearchParams({
-                grant_type: 'refresh_token',
-                client_id: appId,
-                client_secret: secret,
-                refresh_token: refreshToken
-              })
-            });
-            const rData = await rRes.json();
-            if (rData.access_token) {
-              accessToken = rData.access_token;
-              const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
-              stmt.run('ml_access_token', encryptField(rData.access_token));
-              if (rData.refresh_token) stmt.run('ml_refresh_token', encryptField(rData.refresh_token));
-              stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + (rData.expires_in || 21600)));
-              continue;
+          // Se retornar 401, tenta auto-renovação e repete
+          if (orderRes.status === 401) {
+            const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+            const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
+            if (refreshToken && retries === 0) {
+              retries++;
+              logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado. Renovando token via refresh_token.', req.socket.remoteAddress);
+              const rRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+                },
+                body: new URLSearchParams({
+                  grant_type: 'refresh_token',
+                  client_id: appId,
+                  client_secret: secret,
+                  refresh_token: refreshToken
+                })
+              });
+              const rData = await rRes.json();
+              if (rData.access_token) {
+                accessToken = rData.access_token;
+                const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
+                stmt.run('ml_access_token', encryptField(rData.access_token));
+                if (rData.refresh_token) stmt.run('ml_refresh_token', encryptField(rData.refresh_token));
+                stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + (rData.expires_in || 21600)));
+                continue;
+              }
             }
           }
-        }
 
-        if (orderRes.status === 429) {
-          retries++;
-          if (retries > 3) {
-            logSecurityEvent('RATE_LIMIT_EXCEEDED', 'Limite de requisições do Mercado Livre excedido após 3 tentativas.', req.socket.remoteAddress);
-            return sendJson(res, 429, { error: 'Limite de requisições da API do Mercado Livre atingido (HTTP 429). Tente novamente em alguns instantes.' });
+          if (orderRes.status === 429) {
+            retries++;
+            if (retries > 3) {
+              logSecurityEvent('RATE_LIMIT_EXCEEDED', 'Limite de requisições do Mercado Livre excedido após 3 tentativas.', req.socket.remoteAddress);
+              return { ok: false, status: 429, error: 'Limite de requisições da API do Mercado Livre atingido (HTTP 429).' };
+            }
+            logSecurityEvent('RATE_LIMIT_BACKOFF', `HTTP 429 detectado. Aguardando ${backoffDelay}ms antes da tentativa ${retries}...`, req.socket.remoteAddress);
+            await new Promise(r => setTimeout(r, backoffDelay));
+            backoffDelay *= 2;
+            continue;
           }
-          logSecurityEvent('RATE_LIMIT_BACKOFF', `HTTP 429 detectado. Aguardando ${backoffDelay}ms antes da tentativa ${retries}...`, req.socket.remoteAddress);
-          await new Promise(r => setTimeout(r, backoffDelay));
-          backoffDelay *= 2;
-          continue;
-        }
 
-        orderData = await orderRes.json();
-        if (!orderRes.ok) {
-          if (orderRes.status === 401) {
-            logSecurityEvent('API_SYNC_UNAUTHORIZED', 'Requisição rejeitada pelo Mercado Livre (HTTP 401). Token ausente, inválido ou expirado.', req.socket.remoteAddress);
-            return sendJson(res, 401, {
-              error: 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Clique em "Trocar Seller" para atualizar suas credenciais oficiais do Mercado Livre.'
-            });
+          const data = await orderRes.json();
+          if (!orderRes.ok) {
+            return { ok: false, status: orderRes.status, data };
           }
-          if (orderRes.status === 403 && (orderData.code === 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES' || (orderData.message && orderData.message.includes('policy')))) {
-            logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).', req.socket.remoteAddress);
-            return sendJson(res, 403, {
-              error: 'Permissão de Vendas pendente (HTTP 403): O seu aplicativo no Mercado Livre Developers (App ID: ' + (appId || '1536131190806405') + ') foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'
-            });
-          }
-          return sendJson(res, orderRes.status, { error: orderData.message || 'Erro na API do Mercado Livre ao sincronizar pedidos reais.' });
+          return { ok: true, data };
         }
-        break;
+        return { ok: false, status: 500, error: 'Falha de comunicação após múltiplas tentativas.' };
       }
 
-      const results = (orderData && orderData.results) ? orderData.results : [];
+      // Loop de Paginação Dinâmica (offset=0, 50, 100...) baseado em paging.total
+      let offset = 0;
+      let totalOrders = null;
+      const allResults = [];
+      const MAX_ORDERS = 2000;
+
+      while (totalOrders === null || (offset < totalOrders && allResults.length < MAX_ORDERS)) {
+        if (offset > 0) {
+          await new Promise(r => setTimeout(r, 150)); // Micro-delay respeitando limites de requisição
+        }
+
+        const pageResult = await fetchOrdersPage(offset);
+        if (!pageResult.ok) {
+          if (offset === 0) {
+            if (pageResult.status === 401) {
+              logSecurityEvent('API_SYNC_UNAUTHORIZED', 'Requisição rejeitada pelo Mercado Livre (HTTP 401). Token ausente, inválido ou expirado.', req.socket.remoteAddress);
+              return sendJson(res, 401, {
+                error: 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Clique em "Trocar Seller" para atualizar suas credenciais oficiais do Mercado Livre.'
+              });
+            }
+            if (pageResult.status === 403 && (pageResult.data?.code === 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES' || (pageResult.data?.message && pageResult.data?.message.includes('policy')))) {
+              logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).', req.socket.remoteAddress);
+              return sendJson(res, 403, {
+                error: 'Permissão de Vendas pendente (HTTP 403): O seu aplicativo no Mercado Livre Developers (App ID: ' + (appId || '1536131190806405') + ') foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'
+              });
+            }
+            return sendJson(res, pageResult.status, { error: pageResult.data?.message || pageResult.error || 'Erro na API do Mercado Livre ao sincronizar pedidos reais.' });
+          }
+          // Se falhou em páginas posteriores, encerra a paginação com o lote já carregado
+          break;
+        }
+
+        const pageData = pageResult.data;
+        const pageItems = Array.isArray(pageData.results) ? pageData.results : [];
+        if (pageItems.length === 0) {
+          break;
+        }
+
+        allResults.push(...pageItems);
+
+        if (totalOrders === null) {
+          totalOrders = (pageData.paging && typeof pageData.paging.total === 'number')
+            ? pageData.paging.total
+            : pageItems.length;
+        }
+
+        offset += pageItems.length;
+      }
+
       let savedCount = 0;
       const unregisteredMap = {};
+      const shipmentCache = new Map();
 
       const stmtInsert = db.prepare(`
         INSERT OR REPLACE INTO pedidos_vendas 
@@ -1147,94 +1184,109 @@ const server = http.createServer(async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, ?, 'ready_to_ship', ?, ?)
       `);
 
-      for (const order of results) {
-        const orderId = String(order.id).replace(/[^0-9]/g, '');
-        const shipping = order.shipping || {};
-        const shippingId = String(shipping.id || '');
-        let envioTipo = (shipping.shipping_mode && (shipping.shipping_mode.includes('self_service') || shipping.shipping_mode.includes('turbo'))) ? 'flex' : 'coleta';
+      db.exec('BEGIN TRANSACTION');
+      try {
+        for (const order of allResults) {
+          const orderId = String(order.id).replace(/[^0-9]/g, '');
+          const shipping = order.shipping || {};
+          const shippingId = String(shipping.id || '');
+          let envioTipo = (shipping.shipping_mode && (shipping.shipping_mode.includes('self_service') || shipping.shipping_mode.includes('turbo'))) ? 'flex' : 'coleta';
 
-        // Verificação de modalidade real de logística
-        if (shippingId) {
-          try {
-            const shipRes = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
-              headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
-              }
-            });
-            if (shipRes.ok) {
-              const shipData = await shipRes.json();
-              if (shipData.logistic_type === 'self_service' || (shipData.logistic_type && shipData.logistic_type.includes('turbo'))) {
-                envioTipo = 'flex';
-              } else {
-                envioTipo = 'coleta';
+          // Verificação de modalidade real de logística com cache por shipping_id
+          if (shippingId) {
+            if (shipmentCache.has(shippingId)) {
+              envioTipo = shipmentCache.get(shippingId);
+            } else {
+              try {
+                const shipRes = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+                  headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+                  }
+                });
+                if (shipRes.ok) {
+                  const shipData = await shipRes.json();
+                  if (shipData.logistic_type === 'self_service' || (shipData.logistic_type && shipData.logistic_type.includes('turbo'))) {
+                    envioTipo = 'flex';
+                  } else {
+                    envioTipo = 'coleta';
+                  }
+                  shipmentCache.set(shippingId, envioTipo);
+                }
+              } catch (e) {
+                // mantém fallback seguro
               }
             }
-          } catch (e) {
-            // mantém fallback seguro
+          }
+
+          const items = order.order_items || [];
+          const firstName = (order.buyer && order.buyer.first_name) ? String(order.buyer.first_name).replace(/[^\p{L}\s]/gu, '') : '';
+          const lastName = (order.buyer && order.buyer.last_name) ? String(order.buyer.last_name).replace(/[^\p{L}\s]/gu, '') : '';
+          const buyerClean = `${firstName} ${lastName}`.trim() || 'Cliente Mercado Livre';
+          const dateCreated = order.date_created || new Date().toISOString();
+
+          for (const itemObj of items) {
+            const mlItemId = String((itemObj.item && itemObj.item.id) || '').replace(/[^0-9]/g, '');
+            const rawTitle = String((itemObj.item && itemObj.item.title) || 'Item ML').replace(/<[^>]*>?/gm, '');
+            const titleClean = rawTitle.slice(0, 150);
+            const quantity = Math.max(1, Math.min(1000, parseInt(itemObj.quantity || 1, 10)));
+
+            // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
+            const adCheck = db.prepare("SELECT kit FROM anuncios WHERE id_ml = ?").get(mlItemId);
+            const initialStatus = (adCheck && adCheck.kit === 'N') ? 'separado' : 'pendente';
+            const separadoEm = (initialStatus === 'separado') ? new Date().toISOString() : null;
+
+            stmtInsert.run(
+              orderId,
+              mlItemId,
+              titleClean,
+              quantity,
+              buyerClean.slice(0, 80),
+              dateCreated,
+              envioTipo,
+              initialStatus,
+              separadoEm
+            );
+            savedCount++;
+
+            // Identificar se o anúncio do Mercado Livre não está cadastrado no banco
+            const isRegistered = db.prepare("SELECT 1 FROM anuncios WHERE id_ml = ?").get(mlItemId);
+            if (!isRegistered && !unregisteredMap[mlItemId]) {
+              unregisteredMap[mlItemId] = {
+                id_ml: mlItemId,
+                titulo: titleClean,
+                quantidade: quantity,
+              };
+            }
           }
         }
-
-        const items = order.order_items || [];
-        const firstName = (order.buyer && order.buyer.first_name) ? String(order.buyer.first_name).replace(/[^\p{L}\s]/gu, '') : '';
-        const lastName = (order.buyer && order.buyer.last_name) ? String(order.buyer.last_name).replace(/[^\p{L}\s]/gu, '') : '';
-        const buyerClean = `${firstName} ${lastName}`.trim() || 'Cliente Mercado Livre';
-        const dateCreated = order.date_created || new Date().toISOString();
-
-        for (const itemObj of items) {
-          const mlItemId = String((itemObj.item && itemObj.item.id) || '').replace(/[^0-9]/g, '');
-          const rawTitle = String((itemObj.item && itemObj.item.title) || 'Item ML').replace(/<[^>]*>?/gm, '');
-          const titleClean = rawTitle.slice(0, 150);
-          const quantity = Math.max(1, Math.min(1000, parseInt(itemObj.quantity || 1, 10)));
-
-          // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
-          const adCheck = db.prepare("SELECT kit FROM anuncios WHERE id_ml = ?").get(mlItemId);
-          const initialStatus = (adCheck && adCheck.kit === 'N') ? 'separado' : 'pendente';
-          const separadoEm = (initialStatus === 'separado') ? new Date().toISOString() : null;
-
-          stmtInsert.run(
-            orderId,
-            mlItemId,
-            titleClean,
-            quantity,
-            buyerClean.slice(0, 80),
-            dateCreated,
-            envioTipo,
-            initialStatus,
-            separadoEm
-          );
-          savedCount++;
-
-          // Identificar se o anúncio do Mercado Livre não está cadastrado no banco
-          const isRegistered = db.prepare("SELECT 1 FROM anuncios WHERE id_ml = ?").get(mlItemId);
-          if (!isRegistered && !unregisteredMap[mlItemId]) {
-            unregisteredMap[mlItemId] = {
-              id_ml: mlItemId,
-              titulo: titleClean,
-              quantidade: quantity,
-            };
-          }
-        }
+        db.exec('COMMIT');
+      } catch (errDb) {
+        db.exec('ROLLBACK');
+        throw errDb;
       }
 
       const unregisteredList = Object.values(unregisteredMap);
+      const totalPages = Math.ceil((totalOrders || allResults.length) / 50);
 
       logSecurityEvent(
         'ORDERS_SYNCED_SUCCESS',
-        `Sincronização em tempo real: ${results.length} pedidos oficiais analisados, ${savedCount} itens processados e ${unregisteredList.length} anúncios sem cadastro identificados.`,
+        `Sincronização paginada em tempo real: ${allResults.length} pedidos oficiais analisados em ${totalPages} página(s), ${savedCount} itens processados e ${unregisteredList.length} anúncios sem cadastro identificados.`,
         req.socket.remoteAddress
       );
 
       return sendJson(res, 200, {
         success: true,
-        orders_found: results.length,
+        orders_found: allResults.length,
+        total_orders: totalOrders || allResults.length,
+        total_pages: Math.max(1, totalPages),
         items_imported: savedCount,
         unregistered_count: unregisteredList.length,
         unregistered_items: unregisteredList,
-        message: results.length > 0
+        message: allResults.length > 0
           ? (unregisteredList.length > 0
-              ? `Sincronização concluída! ${savedCount} itens importados. ⚠️ Atenção: ${unregisteredList.length} anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!`
-              : `Sincronização concluída! ${savedCount} itens reais atualizados na lista de expedição.`)
+              ? `Sincronização concluída! ${savedCount} itens importados (${totalPages} página(s)). ⚠️ Atenção: ${unregisteredList.length} anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!`
+              : `Sincronização concluída! ${savedCount} itens reais atualizados na lista de expedição (${totalPages} página(s) analisadas).`)
           : 'API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento.'
       });
     } catch (err) {

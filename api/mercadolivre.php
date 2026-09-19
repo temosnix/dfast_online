@@ -150,40 +150,69 @@ class MercadoLivreClient {
         }
 
         $sellerId = $this->sellerId ?: '34977269';
+        $allResults = [];
+        $offset = 0;
+        $limit = 50;
+        $totalOrders = null;
+        $maxOrders = 2000;
 
-        // Busca pedidos reais pagos que ainda não foram entregues (regras do repositório BD-APP)
-        $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50";
+        do {
+            $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit={$limit}&offset={$offset}";
 
-        $response = $this->executeCurlWithBackoff('GET', $url, [], [
-            "Authorization: Bearer {$accessToken}"
-        ]);
+            $response = $this->executeCurlWithBackoff('GET', $url, [], [
+                "Authorization: Bearer {$accessToken}"
+            ]);
 
-        // Se retornar 401 (token expirado no ML), força renovação imediata e retenta
-        if (isset($response['error']) && (str_contains($response['error'], '401') || str_contains($response['error'], 'invalid_token') || str_contains($response['error'], 'expired'))) {
-            $this->logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado durante sincronização. Renovando token via refresh_token.');
-            $refreshRes = $this->refreshToken();
-            if (isset($refreshRes['access_token'])) {
-                $accessToken = $refreshRes['access_token'];
-                $response = $this->executeCurlWithBackoff('GET', $url, [], [
-                    "Authorization: Bearer {$accessToken}"
-                ]);
+            // Se retornar 401 (token expirado no ML), força renovação imediata e retenta
+            if (isset($response['error']) && (str_contains($response['error'], '401') || str_contains($response['error'], 'invalid_token') || str_contains($response['error'], 'expired'))) {
+                $this->logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado durante sincronização. Renovando token via refresh_token.');
+                $refreshRes = $this->refreshToken();
+                if (isset($refreshRes['access_token'])) {
+                    $accessToken = $refreshRes['access_token'];
+                    $response = $this->executeCurlWithBackoff('GET', $url, [], [
+                        "Authorization: Bearer {$accessToken}"
+                    ]);
+                }
             }
-        }
 
-        if (isset($response['error'])) {
-            if ((isset($response['status']) && $response['status'] === 401) || str_contains($response['error'], '401') || str_contains($response['error'], 'unauthorized')) {
-                return ['error' => 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Atualize suas credenciais oficiais em "Trocar Seller".'];
+            if (isset($response['error'])) {
+                if ($offset === 0) {
+                    if ((isset($response['status']) && $response['status'] === 401) || str_contains($response['error'], '401') || str_contains($response['error'], 'unauthorized')) {
+                        return ['error' => 'Não autorizado (HTTP 401): As credenciais (Access Token ou App ID) gravadas no banco de dados são valores de exemplo ou expiraram. Atualize suas credenciais oficiais em "Trocar Seller".'];
+                    }
+                    if ((isset($response['status']) && $response['status'] === 403) || str_contains(json_encode($response), 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES') || str_contains(json_encode($response), 'PolicyAgent')) {
+                        $this->logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).');
+                        return ['error' => 'Permissão de Vendas pendente (HTTP 403): Seu aplicativo no Mercado Livre Developers foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'];
+                    }
+                    return $response;
+                }
+                // Se falhou em páginas subsequentes, encerra a paginação mantendo o que já obteve
+                break;
             }
-            if ((isset($response['status']) && $response['status'] === 403) || str_contains(json_encode($response), 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES') || str_contains(json_encode($response), 'PolicyAgent')) {
-                $this->logSecurityEvent('API_SYNC_POLICY_AGENT_BLOCK', 'Permissão de Vendas/Envios pendente no DevCenter do Mercado Livre (PA_UNAUTHORIZED_RESULT_FROM_POLICIES).');
-                return ['error' => 'Permissão de Vendas pendente (HTTP 403): Seu aplicativo no Mercado Livre Developers foi autenticado com sucesso, mas precisa da permissão de "Vendas e Envios" (urn:ml:mktp:orders-shipments:/read-only) habilitada no DevCenter.'];
-            }
-            return $response;
-        }
 
-        $results = $response['results'] ?? [];
+            $pageResults = $response['results'] ?? [];
+            if (empty($pageResults)) {
+                break;
+            }
+
+            foreach ($pageResults as $r) {
+                $allResults[] = $r;
+            }
+
+            if ($totalOrders === null) {
+                $totalOrders = (isset($response['paging']['total'])) ? (int)$response['paging']['total'] : count($pageResults);
+            }
+
+            $offset += count($pageResults);
+
+            if ($offset < $totalOrders && count($allResults) < $maxOrders) {
+                usleep(150000); // 150ms micro-delay respeitando limites
+            }
+        } while ($offset < $totalOrders && count($allResults) < $maxOrders);
+
         $savedCount = 0;
-        $todayStr = date('Y-m-d');
+        $unregisteredMap = [];
+        $shipmentCache = [];
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO pedidos_vendas 
@@ -191,97 +220,112 @@ class MercadoLivreClient {
             VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :data_venda, :envio_tipo, :envio_status, :status_picking, :separado_em)
         ");
 
-        foreach ($results as $order) {
-            $orderId = preg_replace('/[^0-9]/', '', (string)$order['id']);
-            $shipping = $order['shipping'] ?? [];
-            $shippingId = (string)($shipping['id'] ?? '');
+        $this->pdo->beginTransaction();
+        try {
+            foreach ($allResults as $order) {
+                $orderId = preg_replace('/[^0-9]/', '', (string)$order['id']);
+                $shipping = $order['shipping'] ?? [];
+                $shippingId = (string)($shipping['id'] ?? '');
 
-            // Determinar modalidade de envio (Flex vs Coleta)
-            $shippingMode = $shipping['shipping_mode'] ?? 'normal';
-            $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
+                // Determinar modalidade de envio (Flex vs Coleta) com cache
+                $shippingMode = $shipping['shipping_mode'] ?? 'normal';
+                $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
 
-            // Se possuir envio identificado, verifica logistic_type real na API de envios
-            if (!empty($shippingId)) {
-                $shipmentData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}", [], [
-                    "Authorization: Bearer {$accessToken}"
-                ]);
-
-                if (!isset($shipmentData['error']) && !empty($shipmentData['logistic_type'])) {
-                    $logisticType = $shipmentData['logistic_type'];
-                    if ($logisticType === 'self_service' || str_contains($logisticType, 'turbo')) {
-                        $envioTipo = 'flex';
+                // Se possuir envio identificado, verifica logistic_type real na API de envios
+                if (!empty($shippingId)) {
+                    if (isset($shipmentCache[$shippingId])) {
+                        $envioTipo = $shipmentCache[$shippingId];
                     } else {
-                        $envioTipo = 'coleta';
+                        $shipmentData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}", [], [
+                            "Authorization: Bearer {$accessToken}"
+                        ]);
+
+                        if (!isset($shipmentData['error']) && !empty($shipmentData['logistic_type'])) {
+                            $logisticType = $shipmentData['logistic_type'];
+                            if ($logisticType === 'self_service' || str_contains($logisticType, 'turbo')) {
+                                $envioTipo = 'flex';
+                            } else {
+                                $envioTipo = 'coleta';
+                            }
+                            $shipmentCache[$shippingId] = $envioTipo;
+                        }
+                    }
+                }
+
+                // Sanitização de dados de comprador (Minimização LGPD)
+                $firstName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['first_name'] ?? '');
+                $lastName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['last_name'] ?? '');
+                $buyerClean = trim("{$firstName} {$lastName}");
+                if (empty($buyerClean)) $buyerClean = 'Cliente Mercado Livre';
+
+                $dateCreated = $order['date_created'] ?? date('Y-m-d H:i:s');
+                $items = $order['order_items'] ?? [];
+
+                foreach ($items as $itemObj) {
+                    $mlItemId = preg_replace('/[^0-9]/', '', str_replace('MLB', '', $itemObj['item']['id'] ?? ''));
+                    $rawTitle = strip_tags($itemObj['item']['title'] ?? 'Item ML');
+                    $titleClean = substr($rawTitle, 0, 150);
+                    $quantity = max(1, min(1000, (int)($itemObj['quantity'] ?? 1)));
+
+                    // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
+                    $adCheck = $this->pdo->prepare("SELECT kit FROM anuncios WHERE id_ml = ?");
+                    $adCheck->execute([$mlItemId]);
+                    $adRow = $adCheck->fetch();
+                    $initialStatus = ($adRow && $adRow['kit'] === 'N') ? 'separado' : 'pendente';
+                    $separadoEm = ($initialStatus === 'separado') ? date('Y-m-d H:i:s') : null;
+
+                    $stmt->execute([
+                        'order_id' => $orderId,
+                        'ml_item_id' => $mlItemId,
+                        'titulo' => $titleClean,
+                        'quantidade' => $quantity,
+                        'comprador' => substr($buyerClean, 0, 80),
+                        'data_venda' => $dateCreated,
+                        'envio_tipo' => $envioTipo,
+                        'envio_status' => 'ready_to_ship',
+                        'status_picking' => $initialStatus,
+                        'separado_em' => $separadoEm,
+                    ]);
+                    $savedCount++;
+
+                    // Verificar se o anúncio existe na tabela anuncios
+                    $chkStmt = $this->pdo->prepare("SELECT 1 FROM anuncios WHERE id_ml = ?");
+                    $chkStmt->execute([$mlItemId]);
+                    if (!$chkStmt->fetch() && !isset($unregisteredMap[$mlItemId])) {
+                        $unregisteredMap[$mlItemId] = [
+                            'id_ml' => $mlItemId,
+                            'titulo' => $titleClean,
+                            'quantidade' => $quantity,
+                        ];
                     }
                 }
             }
-
-            // Sanitização de dados de comprador (Minimização LGPD)
-            $firstName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['first_name'] ?? '');
-            $lastName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['last_name'] ?? '');
-            $buyerClean = trim("{$firstName} {$lastName}");
-            if (empty($buyerClean)) $buyerClean = 'Cliente Mercado Livre';
-
-            $dateCreated = $order['date_created'] ?? date('Y-m-d H:i:s');
-            $items = $order['order_items'] ?? [];
-
-            foreach ($items as $itemObj) {
-                $mlItemId = preg_replace('/[^0-9]/', '', str_replace('MLB', '', $itemObj['item']['id'] ?? ''));
-                $rawTitle = strip_tags($itemObj['item']['title'] ?? 'Item ML');
-                $titleClean = substr($rawTitle, 0, 150);
-                $quantity = max(1, min(1000, (int)($itemObj['quantity'] ?? 1)));
-
-                // Identificar se o anúncio já está cadastrado como Produção Local (kit = 'N')
-                $adCheck = $this->pdo->prepare("SELECT kit FROM anuncios WHERE id_ml = ?");
-                $adCheck->execute([$mlItemId]);
-                $adRow = $adCheck->fetch();
-                $initialStatus = ($adRow && $adRow['kit'] === 'N') ? 'separado' : 'pendente';
-                $separadoEm = ($initialStatus === 'separado') ? date('Y-m-d H:i:s') : null;
-
-                $stmt->execute([
-                    'order_id' => $orderId,
-                    'ml_item_id' => $mlItemId,
-                    'titulo' => $titleClean,
-                    'quantidade' => $quantity,
-                    'comprador' => substr($buyerClean, 0, 80),
-                    'data_venda' => $dateCreated,
-                    'envio_tipo' => $envioTipo,
-                    'envio_status' => 'ready_to_ship',
-                    'status_picking' => $initialStatus,
-                    'separado_em' => $separadoEm,
-                ]);
-                $savedCount++;
-
-                // Verificar se o anúncio existe na tabela anuncios
-                $chkStmt = $this->pdo->prepare("SELECT 1 FROM anuncios WHERE id_ml = ?");
-                $chkStmt->execute([$mlItemId]);
-                if (!$chkStmt->fetch() && !isset($unregisteredMap[$mlItemId])) {
-                    $unregisteredMap[$mlItemId] = [
-                        'id_ml' => $mlItemId,
-                        'titulo' => $titleClean,
-                        'quantidade' => $quantity,
-                    ];
-                }
-            }
+            $this->pdo->commit();
+        } catch (Exception $e) {
+            $this->pdo->rollBack();
+            throw $e;
         }
 
         $unregisteredList = array_values($unregisteredMap ?? []);
+        $totalPages = ceil(($totalOrders ?? count($allResults)) / 50);
 
         $this->logSecurityEvent(
             'ORDERS_SYNCED_SUCCESS', 
-            "Sincronização em tempo real: " . count($results) . " pedidos oficiais analisados, {$savedCount} itens processados e " . count($unregisteredList) . " anúncios sem cadastro identificados."
+            "Sincronização paginada em tempo real: " . count($allResults) . " pedidos oficiais analisados em {$totalPages} página(s), {$savedCount} itens processados e " . count($unregisteredList) . " anúncios sem cadastro identificados."
         );
 
         return [
             'success' => true,
-            'orders_found' => count($results),
+            'orders_found' => count($allResults),
+            'total_orders' => $totalOrders ?? count($allResults),
+            'total_pages' => max(1, (int)$totalPages),
             'items_imported' => $savedCount,
             'unregistered_count' => count($unregisteredList),
             'unregistered_items' => $unregisteredList,
-            'message' => count($results) > 0 
+            'message' => count($allResults) > 0 
                 ? (count($unregisteredList) > 0 
-                    ? "Sincronização concluída! {$savedCount} itens importados. ⚠️ Atenção: " . count($unregisteredList) . " anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!"
-                    : "Sincronização concluída! {$savedCount} itens reais atualizados na lista de expedição.")
+                    ? "Sincronização concluída! {$savedCount} itens importados ({$totalPages} página(s)). ⚠️ Atenção: " . count($unregisteredList) . " anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!"
+                    : "Sincronização concluída! {$savedCount} itens reais atualizados na lista de expedição ({$totalPages} página(s) analisadas).")
                 : "API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento."
         ];
     }
