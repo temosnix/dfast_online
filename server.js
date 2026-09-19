@@ -386,39 +386,237 @@ const server = http.createServer(async (req, res) => {
         params.push(`%${localFilter}%`);
       }
 
-      query += " ORDER BY COALESCE(d.local, 'S/L') ASC, d.id_nissi ASC LIMIT 300";
+      query += " ORDER BY COALESCE(d.local, 'S/L') ASC, d.id_nissi ASC LIMIT 500";
       const items = db.prepare(query).all(...params);
 
-      return sendJson(res, 200, { success: true, stock: items });
+      // Summary metrics for Stock KPIs
+      const totalItems = db.prepare("SELECT COUNT(*) as c FROM distribuidor").get().c;
+      const totalUnits = db.prepare("SELECT COALESCE(SUM(saldo_atual), 0) as s FROM estoque_saldos").get().s;
+      const lowStockCount = db.prepare(`
+        SELECT COUNT(*) as c 
+        FROM distribuidor d 
+        LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi 
+        WHERE COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
+      `).get().c;
+      const unassignedLocalCount = db.prepare(`
+        SELECT COUNT(*) as c 
+        FROM distribuidor 
+        WHERE local IS NULL OR local = '' OR local = 'S/L'
+      `).get().c;
+
+      return sendJson(res, 200, { 
+        success: true, 
+        stock: items,
+        metrics: {
+          total_items: totalItems,
+          total_units: totalUnits,
+          low_stock_count: lowStockCount,
+          unassigned_local_count: unassignedLocalCount
+        }
+      });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
     }
   }
 
-  // 5. /api/stock/update
+  // 5.1 /api/stock/create (Cadastrar Novo Item no Catálogo Nissi)
+  if (pathname === '/api/stock/create' && req.method === 'POST') {
+    try {
+      const { id_nissi, descricao, unidade_medida, local, saldo_atual, estoque_minimo } = body;
+      if (!id_nissi || !String(id_nissi).trim()) {
+        return sendJson(res, 400, { error: 'Código Nissi é obrigatório' });
+      }
+      const cleanId = String(id_nissi).trim().toUpperCase();
+      const cleanDesc = String(descricao || '').trim();
+      if (!cleanDesc) {
+        return sendJson(res, 400, { error: 'Descrição da peça é obrigatória' });
+      }
+      const cleanUnidade = (String(unidade_medida || '').trim().toUpperCase() === 'PAR') ? 'PAR' : 'UNIDADE';
+      const cleanLocal = String(local || 'S/L').trim().toUpperCase();
+      const saldo = Math.max(0, parseInt(saldo_atual ?? 0, 10) || 0);
+      const minimo = Math.max(0, parseInt(estoque_minimo ?? 5, 10) || 5);
+
+      const existing = db.prepare("SELECT id_nissi FROM distribuidor WHERE id_nissi = ?").get(cleanId);
+      if (existing) {
+        return sendJson(res, 409, { error: `O código Nissi "${cleanId}" já está cadastrado no sistema.` });
+      }
+
+      db.exec('BEGIN TRANSACTION');
+      try {
+        db.prepare(`
+          INSERT INTO distribuidor (id_nissi, descricao, unidade_medida, local)
+          VALUES (?, ?, ?, ?)
+        `).run(cleanId, cleanDesc, cleanUnidade, cleanLocal);
+
+        db.prepare(`
+          INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
+          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(cleanId, saldo, minimo);
+
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      logSecurityEvent('STOCK_ITEM_CREATED', `Item ${cleanId} cadastrado no estoque: "${cleanDesc}", Local: ${cleanLocal}, Saldo: ${saldo}.`, req.socket.remoteAddress);
+
+      return sendJson(res, 201, {
+        success: true,
+        message: `Item ${cleanId} criado com sucesso no catálogo!`
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 5.2 /api/stock/update (Atualizar Item Completo ou Saldo/Local)
   if (pathname === '/api/stock/update' && req.method === 'POST') {
     try {
-      const { id_nissi, saldo_atual, estoque_minimo, local } = body;
+      const { id_nissi, descricao, unidade_medida, saldo_atual, estoque_minimo, local } = body;
       if (!id_nissi) {
         return sendJson(res, 400, { error: 'id_nissi é obrigatório' });
       }
+      const cleanId = String(id_nissi).trim();
 
-      if (saldo_atual !== undefined || estoque_minimo !== undefined) {
+      db.exec('BEGIN TRANSACTION');
+      try {
+        if (descricao !== undefined || unidade_medida !== undefined || local !== undefined) {
+          const current = db.prepare("SELECT descricao, unidade_medida, local FROM distribuidor WHERE id_nissi = ?").get(cleanId);
+          if (!current) {
+            db.exec('ROLLBACK');
+            return sendJson(res, 404, { error: `Item ${cleanId} não encontrado no catálogo` });
+          }
+
+          const newDesc = descricao !== undefined ? String(descricao).trim() : current.descricao;
+          const newUnidade = unidade_medida !== undefined 
+            ? ((String(unidade_medida).trim().toUpperCase() === 'PAR') ? 'PAR' : 'UNIDADE')
+            : current.unidade_medida;
+          const newLocal = local !== undefined ? String(local).trim().toUpperCase() : current.local;
+
+          db.prepare("UPDATE distribuidor SET descricao = ?, unidade_medida = ?, local = ? WHERE id_nissi = ?")
+            .run(newDesc, newUnidade, newLocal, cleanId);
+        }
+
+        if (saldo_atual !== undefined || estoque_minimo !== undefined) {
+          const saldo = saldo_atual !== undefined ? Math.max(0, parseInt(saldo_atual, 10) || 0) : null;
+          const minimo = estoque_minimo !== undefined ? Math.max(0, parseInt(estoque_minimo, 10) || 0) : null;
+
+          db.prepare(`
+            INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
+            VALUES (?, COALESCE(?, 10), COALESCE(?, 5), CURRENT_TIMESTAMP)
+            ON CONFLICT(id_nissi) DO UPDATE SET
+              saldo_atual = COALESCE(?, estoque_saldos.saldo_atual),
+              estoque_minimo = COALESCE(?, estoque_saldos.estoque_minimo),
+              atualizado_em = CURRENT_TIMESTAMP
+          `).run(cleanId, saldo, minimo, saldo, minimo);
+        }
+
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      logSecurityEvent('STOCK_ITEM_UPDATED', `Item ${cleanId} atualizado no estoque.`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, { success: true, message: `Item ${cleanId} atualizado com sucesso!` });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 5.3 /api/stock/adjust (Ajuste Rápido de Saldo +1 / -1 / +X / -X)
+  if (pathname === '/api/stock/adjust' && req.method === 'POST') {
+    try {
+      const { id_nissi, delta, motivo } = body;
+      if (!id_nissi) {
+        return sendJson(res, 400, { error: 'id_nissi é obrigatório' });
+      }
+      const numDelta = parseInt(delta, 10);
+      if (isNaN(numDelta) || numDelta === 0) {
+        return sendJson(res, 400, { error: 'delta numérico é obrigatório e diferente de zero' });
+      }
+
+      const cleanId = String(id_nissi).trim();
+
+      db.exec('BEGIN TRANSACTION');
+      let novoSaldo = 0;
+      try {
+        const current = db.prepare("SELECT COALESCE(saldo_atual, 0) as s FROM estoque_saldos WHERE id_nissi = ?").get(cleanId);
+        const currentSaldo = current ? current.s : 0;
+        novoSaldo = Math.max(0, currentSaldo + numDelta);
+
         db.prepare(`
           INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
-          VALUES (?, COALESCE(?, 10), COALESCE(?, 5), CURRENT_TIMESTAMP)
+          VALUES (?, ?, 5, CURRENT_TIMESTAMP)
           ON CONFLICT(id_nissi) DO UPDATE SET
-            saldo_atual = COALESCE(?, estoque_saldos.saldo_atual),
-            estoque_minimo = COALESCE(?, estoque_saldos.estoque_minimo),
+            saldo_atual = ?,
             atualizado_em = CURRENT_TIMESTAMP
-        `).run(id_nissi, saldo_atual ?? 10, estoque_minimo ?? 5, saldo_atual ?? null, estoque_minimo ?? null);
+        `).run(cleanId, novoSaldo, novoSaldo);
+
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
       }
 
-      if (local !== undefined) {
-        db.prepare("UPDATE distribuidor SET local = ? WHERE id_nissi = ?").run(local.trim(), id_nissi);
+      logSecurityEvent('STOCK_ADJUSTMENT', `Ajuste rápido de estoque no item ${cleanId}: delta ${numDelta > 0 ? '+' : ''}${numDelta}, novo saldo: ${novoSaldo}. Motivo: ${motivo || 'Contagem Manual'}`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        id_nissi: cleanId,
+        saldo_atual: novoSaldo,
+        message: `Saldo de ${cleanId} ajustado para ${novoSaldo} un!`
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 5.4 /api/stock/delete (Excluir Item do Catálogo com Proteção de Vínculos)
+  if (pathname === '/api/stock/delete' && req.method === 'POST') {
+    try {
+      const { id_nissi, force } = body;
+      if (!id_nissi) {
+        return sendJson(res, 400, { error: 'id_nissi é obrigatório' });
+      }
+      const cleanId = String(id_nissi).trim();
+
+      const linkedAds = db.prepare(`
+        SELECT k.id_ml_anuncio, a.caixa
+        FROM kits_anuncio k
+        LEFT JOIN anuncios a ON k.id_ml_anuncio = a.id_ml
+        WHERE k.id_kit_nissi = ?
+      `).all(cleanId);
+
+      if (linkedAds.length > 0 && !force) {
+        return sendJson(res, 200, {
+          success: false,
+          requires_confirmation: true,
+          linked_count: linkedAds.length,
+          linked_ads: linkedAds.map(a => a.id_ml_anuncio),
+          warning: `O item ${cleanId} está vinculado a ${linkedAds.length} anúncio(s) do Mercado Livre. Confirmar a exclusão irá desvincular a peça de todos eles.`
+        });
       }
 
-      return sendJson(res, 200, { success: true, message: `Item ${id_nissi} atualizado com sucesso!` });
+      db.exec('BEGIN TRANSACTION');
+      try {
+        db.prepare("DELETE FROM kits_anuncio WHERE id_kit_nissi = ?").run(cleanId);
+        db.prepare("DELETE FROM estoque_saldos WHERE id_nissi = ?").run(cleanId);
+        db.prepare("DELETE FROM distribuidor WHERE id_nissi = ?").run(cleanId);
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      logSecurityEvent('STOCK_ITEM_DELETED', `Item ${cleanId} excluído do catálogo (Vínculos desfeitos: ${linkedAds.length}).`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        message: `Item ${cleanId} excluído com sucesso do catálogo!`
+      });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
     }

@@ -69,6 +69,13 @@ export interface StockItem {
   total_anuncios_vinculados: number;
 }
 
+export interface StockMetrics {
+  total_items: number;
+  total_units: number;
+  low_stock_count: number;
+  unassigned_local_count: number;
+}
+
 export interface PurchaseItem {
   id_nissi: string;
   descricao: string;

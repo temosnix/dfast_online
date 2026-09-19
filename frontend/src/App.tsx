@@ -12,6 +12,7 @@ import {
   RotaConsolidada, 
   CaixaNecessaria, 
   StockItem, 
+  StockMetrics,
   PurchaseItem, 
   MLConfig,
   UnregisteredAd
@@ -25,6 +26,7 @@ export default function App() {
   const [rotaConsolidada, setRotaConsolidada] = useState<RotaConsolidada[]>([]);
   const [caixasNecessarias, setCaixasNecessarias] = useState<CaixaNecessaria[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
+  const [stockMetrics, setStockMetrics] = useState<StockMetrics | null>(null);
   const [purchases, setPurchases] = useState<PurchaseItem[]>([]);
   const [unregisteredAds, setUnregisteredAds] = useState<UnregisteredAd[]>([]);
   const [distribuidorNome, setDistribuidorNome] = useState('Distribuidor Nissi');
@@ -84,6 +86,7 @@ export default function App() {
       if (stockRes.ok) {
         const d = await stockRes.json();
         setStock(d.stock || []);
+        if (d.metrics) setStockMetrics(d.metrics);
       }
     } catch (err: any) {
       console.error('Erro ao carregar dados:', err);
@@ -98,6 +101,7 @@ export default function App() {
       if (res.ok) {
         const d = await res.json();
         setStock(d.stock || []);
+        if (d.metrics) setStockMetrics(d.metrics);
       }
     } catch (err) {
       console.error(err);
@@ -268,7 +272,9 @@ export default function App() {
             {activeTab === 'stock' && (
               <StockView
                 stock={stock}
-                onUpdateStock={handleUpdateStock}
+                metrics={stockMetrics}
+                onRefresh={loadStock}
+                showNotification={showNotification}
                 loading={loading}
               />
             )}

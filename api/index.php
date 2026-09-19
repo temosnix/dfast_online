@@ -248,20 +248,96 @@ try {
             $params['local'] = "%$localFilter%";
         }
 
-        $sql .= " ORDER BY COALESCE(d.local, 'S/L') ASC, d.id_nissi ASC LIMIT 300";
+        $sql .= " ORDER BY COALESCE(d.local, 'S/L') ASC, d.id_nissi ASC LIMIT 500";
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $items = $stmt->fetchAll();
 
-        echo json_encode(['success' => true, 'stock' => $items]);
+        // Métricas de Estoque para Cards KPI
+        $totalItems = (int)$pdo->query("SELECT COUNT(*) FROM distribuidor")->fetchColumn();
+        $totalUnits = (int)$pdo->query("SELECT COALESCE(SUM(saldo_atual), 0) FROM estoque_saldos")->fetchColumn();
+        $lowStockCount = (int)$pdo->query("
+            SELECT COUNT(*) 
+            FROM distribuidor d 
+            LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi 
+            WHERE COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
+        ")->fetchColumn();
+        $unassignedLocalCount = (int)$pdo->query("
+            SELECT COUNT(*) 
+            FROM distribuidor 
+            WHERE local IS NULL OR local = '' OR local = 'S/L'
+        ")->fetchColumn();
+
+        echo json_encode([
+            'success' => true, 
+            'stock' => $items,
+            'metrics' => [
+                'total_items' => $totalItems,
+                'total_units' => $totalUnits,
+                'low_stock_count' => $lowStockCount,
+                'unassigned_local_count' => $unassignedLocalCount
+            ]
+        ]);
         exit;
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/stock/update (Atualizar Saldo ou Localização)
+    // ROTA: /api/stock/create (Cadastrar Novo Item no Catálogo Nissi)
+    // -------------------------------------------------------------
+    if ($route === 'stock/create' && $method === 'POST') {
+        $idNissi = isset($input['id_nissi']) ? strtoupper(trim(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $input['id_nissi']))) : '';
+        $descricao = isset($input['descricao']) ? trim(strip_tags($input['descricao'])) : '';
+        $unidade = (isset($input['unidade_medida']) && strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE';
+        $local = isset($input['local']) ? strtoupper(trim(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $input['local']))) : 'S/L';
+        $saldo = isset($input['saldo_atual']) ? max(0, (int)$input['saldo_atual']) : 0;
+        $minimo = isset($input['estoque_minimo']) ? max(0, (int)$input['estoque_minimo']) : 5;
+
+        if (empty($idNissi)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Código Nissi é obrigatório']);
+            exit;
+        }
+        if (empty($descricao)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Descrição da peça é obrigatória']);
+            exit;
+        }
+
+        $checkStmt = $pdo->prepare("SELECT 1 FROM distribuidor WHERE id_nissi = ?");
+        $checkStmt->execute([$idNissi]);
+        if ($checkStmt->fetch()) {
+            http_response_code(409);
+            echo json_encode(['error' => "O código Nissi '{$idNissi}' já está cadastrado no sistema."]);
+            exit;
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $stmtDist = $pdo->prepare("INSERT INTO distribuidor (id_nissi, descricao, unidade_medida, local) VALUES (?, ?, ?, ?)");
+            $stmtDist->execute([$idNissi, $descricao, $unidade, $local ?: 'S/L']);
+
+            $stmtSaldo = $pdo->prepare("INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em) VALUES (?, ?, ?, CURRENT_TIMESTAMP)");
+            $stmtSaldo->execute([$idNissi, $saldo, $minimo]);
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
+
+        echo json_encode(['success' => true, 'message' => "Item {$idNissi} cadastrado com sucesso!"]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/stock/update (Atualizar Item Completo ou Saldo/Local)
     // -------------------------------------------------------------
     if ($route === 'stock/update' && $method === 'POST') {
         $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
+        $descricao = isset($input['descricao']) ? trim(strip_tags($input['descricao'])) : null;
+        $unidade = isset($input['unidade_medida']) ? ((strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE') : null;
         $saldo = isset($input['saldo_atual']) ? max(0, min(1000000, (int)$input['saldo_atual'])) : null;
         $minimo = isset($input['estoque_minimo']) ? max(0, min(100000, (int)$input['estoque_minimo'])) : null;
         $novoLocal = isset($input['local']) ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['local'])), 0, 15)) : null;
@@ -272,29 +348,138 @@ try {
             exit;
         }
 
-        if ($saldo !== null || $minimo !== null) {
-            $stmt = $pdo->prepare("
-                INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
-                VALUES (:id, COALESCE(:saldo, 10), COALESCE(:minimo, 5), CURRENT_TIMESTAMP)
-                ON CONFLICT(id_nissi) DO UPDATE SET
-                    saldo_atual = COALESCE(:saldo, estoque_saldos.saldo_atual),
-                    estoque_minimo = COALESCE(:minimo, estoque_saldos.estoque_minimo),
-                    atualizado_em = CURRENT_TIMESTAMP
-            ");
-            $stmt->execute([
-                'id' => $idNissi,
-                'saldo' => $saldo,
-                'minimo' => $minimo
-            ]);
-        }
+        $pdo->beginTransaction();
+        try {
+            if ($descricao !== null || $unidade !== null || $novoLocal !== null) {
+                $curStmt = $pdo->prepare("SELECT descricao, unidade_medida, local FROM distribuidor WHERE id_nissi = ?");
+                $curStmt->execute([$idNissi]);
+                $curr = $curStmt->fetch();
+                if ($curr) {
+                    $upDesc = $descricao !== null ? $descricao : $curr['descricao'];
+                    $upUn = $unidade !== null ? $unidade : $curr['unidade_medida'];
+                    $upLoc = $novoLocal !== null ? $novoLocal : $curr['local'];
+                    $upDist = $pdo->prepare("UPDATE distribuidor SET descricao = ?, unidade_medida = ?, local = ? WHERE id_nissi = ?");
+                    $upDist->execute([$upDesc, $upUn, $upLoc, $idNissi]);
+                }
+            }
 
-        if ($novoLocal !== null) {
-            $stmtLocal = $pdo->prepare("UPDATE distribuidor SET local = ? WHERE id_nissi = ?");
-            $stmtLocal->execute([$novoLocal, $idNissi]);
+            if ($saldo !== null || $minimo !== null) {
+                $stmt = $pdo->prepare("
+                    INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
+                    VALUES (:id, COALESCE(:saldo, 10), COALESCE(:minimo, 5), CURRENT_TIMESTAMP)
+                    ON CONFLICT(id_nissi) DO UPDATE SET
+                        saldo_atual = COALESCE(:saldo, estoque_saldos.saldo_atual),
+                        estoque_minimo = COALESCE(:minimo, estoque_saldos.estoque_minimo),
+                        atualizado_em = CURRENT_TIMESTAMP
+                ");
+                $stmt->execute([
+                    'id' => $idNissi,
+                    'saldo' => $saldo,
+                    'minimo' => $minimo
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
         }
 
         echo json_encode(['success' => true, 'message' => "Item {$idNissi} atualizado com sucesso!"]);
         exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/stock/adjust (Ajuste Rápido de Saldo +1 / -1 / +X / -X)
+    // -------------------------------------------------------------
+    if ($route === 'stock/adjust' && $method === 'POST') {
+        $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
+        $delta = isset($input['delta']) ? (int)$input['delta'] : 0;
+
+        if (!$idNissi || $delta === 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'id_nissi e delta diferente de zero são obrigatórios']);
+            exit;
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $curStmt = $pdo->prepare("SELECT COALESCE(saldo_atual, 0) as s FROM estoque_saldos WHERE id_nissi = ?");
+            $curStmt->execute([$idNissi]);
+            $curr = $curStmt->fetch();
+            $currSaldo = $curr ? (int)$curr['s'] : 0;
+            $novoSaldo = max(0, $currSaldo + $delta);
+
+            $stmt = $pdo->prepare("
+                INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
+                VALUES (?, ?, 5, CURRENT_TIMESTAMP)
+                ON CONFLICT(id_nissi) DO UPDATE SET
+                    saldo_atual = ?,
+                    atualizado_em = CURRENT_TIMESTAMP
+            ");
+            $stmt->execute([$idNissi, $novoSaldo, $novoSaldo]);
+            $pdo->commit();
+
+            echo json_encode([
+                'success' => true,
+                'id_nissi' => $idNissi,
+                'saldo_atual' => $novoSaldo,
+                'message' => "Saldo de {$idNissi} ajustado para {$novoSaldo} un!"
+            ]);
+            exit;
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/stock/delete (Excluir Item do Catálogo com Proteção)
+    // -------------------------------------------------------------
+    if ($route === 'stock/delete' && $method === 'POST') {
+        $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
+        $force = !empty($input['force']);
+
+        if (!$idNissi) {
+            http_response_code(400);
+            echo json_encode(['error' => 'id_nissi é obrigatório']);
+            exit;
+        }
+
+        $linkStmt = $pdo->prepare("SELECT id_ml_anuncio FROM kits_anuncio WHERE id_kit_nissi = ?");
+        $linkStmt->execute([$idNissi]);
+        $linked = $linkStmt->fetchAll(PDO::FETCH_COLUMN);
+
+        if (count($linked) > 0 && !$force) {
+            echo json_encode([
+                'success' => false,
+                'requires_confirmation' => true,
+                'linked_count' => count($linked),
+                'linked_ads' => $linked,
+                'warning' => "O item {$idNissi} está vinculado a " . count($linked) . " anúncio(s) do Mercado Livre."
+            ]);
+            exit;
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $pdo->prepare("DELETE FROM kits_anuncio WHERE id_kit_nissi = ?")->execute([$idNissi]);
+            $pdo->prepare("DELETE FROM estoque_saldos WHERE id_nissi = ?")->execute([$idNissi]);
+            $pdo->prepare("DELETE FROM distribuidor WHERE id_nissi = ?")->execute([$idNissi]);
+            $pdo->commit();
+
+            echo json_encode(['success' => true, 'message' => "Item {$idNissi} excluído do catálogo!"]);
+            exit;
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()]);
+            exit;
+        }
     }
 
     // -------------------------------------------------------------
