@@ -101,9 +101,8 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Active ML Token Status Pill */}
             {mlConfig?.has_access_token ? (
               <div 
-                onClick={openSettings}
-                className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-pointer hover:bg-emerald-500/20 transition-all"
-                title="Token oficial ativo com AES-256-GCM. Clique para ver detalhes."
+                className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-default"
+                title="Token oficial ativo com AES-256-GCM lido do banco de dados."
               >
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -118,9 +117,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             ) : (
               <div 
-                onClick={openSettings}
-                className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 text-xs cursor-pointer hover:bg-slate-800 transition-all"
-                title="Nenhum token ativo no momento"
+                className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 text-xs cursor-default"
+                title="Nenhum token ativo no momento no banco de dados"
               >
                 <span className="w-2 h-2 rounded-full bg-slate-500"></span>
                 <span>Token Inativo</span>
@@ -147,11 +145,11 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={onSyncML}
               disabled={syncing}
-              title="Buscar pedidos reais e pendentes diretamente na API oficial do Mercado Livre"
+              title="Buscar pedidos reais e pendentes diretamente na API oficial do Mercado Livre usando as credenciais do banco"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 text-white text-xs font-bold shadow-md shadow-sky-500/20 transition-all active:scale-95 disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-white' : ''}`} />
-              <span>{syncing ? 'Sincronizando...' : 'Sincronizar ML (Tempo Real)'}</span>
+              <span>{syncing ? 'Sincronizando...' : 'Sincronizar ML'}</span>
             </button>
 
             {/* Clear Orders */}
@@ -163,13 +161,14 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Trash2 className="w-4 h-4" />
             </button>
 
-            {/* Settings */}
+            {/* Trocar Seller */}
             <button
               onClick={openSettings}
-              title="Configurações e Credenciais Mercado Livre"
-              className="p-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-all"
+              title="Trocar Seller ou Atualizar Credenciais do Banco de Dados"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition-all active:scale-95"
             >
-              <Settings className="w-4 h-4" />
+              <Settings className="w-4 h-4 text-slate-400" />
+              <span className="hidden md:inline text-xs font-semibold">Trocar Seller</span>
             </button>
           </div>
         </div>

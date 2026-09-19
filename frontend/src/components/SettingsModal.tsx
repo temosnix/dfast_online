@@ -129,8 +129,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <Lock className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-lg font-bold text-white">Configurações & Credenciais</h3>
-            <p className="text-xs text-slate-400">Integração oficial com a API do Mercado Livre</p>
+            <h3 className="text-lg font-bold text-white">Configurações & Trocar Seller</h3>
+            <p className="text-xs text-slate-400">Credenciais criptografadas lidas diretamente do banco SQLite</p>
           </div>
         </div>
 
@@ -138,7 +138,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 mb-6 flex items-start gap-2.5">
           <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
           <p className="text-[11px] text-emerald-300/90 leading-relaxed">
-            <strong>Proteção Total de Dados:</strong> Suas credenciais são salvas apenas no seu banco de dados local SQLite e protegidas por <code>.gitignore</code>. <strong>Nunca</strong> serão expostas ou versionadas no GitHub.
+            <strong>Credenciais no Banco de Dados:</strong> O sistema busca as credenciais criptografadas diretamente no SQLite (<code>db_app.db</code>) ao sincronizar. Preencha este formulário apenas se desejar <strong>trocar de Seller</strong> ou atualizar chaves.
           </p>
         </div>
 

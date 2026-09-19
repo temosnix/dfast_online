@@ -148,11 +148,10 @@ export default function App() {
       const res = await fetch('/api/mercadolivre/sync', { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
-        showNotification(`Sincronização concluída! ${data.items_imported} novos itens prontos para expedição.`);
+        showNotification(data.message || `Sincronização concluída! ${data.items_imported} novos itens prontos para expedição.`);
         loadData();
       } else {
-        showNotification(data.error || 'Configure suas credenciais em Configurações para sincronizar com o ML.', 'error');
-        setIsSettingsOpen(true);
+        showNotification(data.error || 'Erro ao sincronizar com o Mercado Livre.', 'error');
       }
     } catch (err) {
       showNotification('Erro ao comunicar com a API do Mercado Livre', 'error');
