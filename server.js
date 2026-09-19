@@ -97,9 +97,13 @@ const MIME_TYPES = {
 function sendJson(res, statusCode, data) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'X-XSS-Protection': '1; mode=block',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-API-Key',
   });
   res.end(JSON.stringify(data));
 }
@@ -108,9 +112,11 @@ const server = http.createServer(async (req, res) => {
   // CORS Preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(200, {
+      'X-Content-Type-Options': 'nosniff',
+      'X-Frame-Options': 'SAMEORIGIN',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, X-API-Key',
     });
     res.end();
     return;
@@ -452,13 +458,15 @@ const server = http.createServer(async (req, res) => {
         VALUES (?, ?, ?, ?, ?, ?, 'ready_to_ship', 'pendente')
       `);
 
+      const stmtDesc = db.prepare(`
+        SELECT d.descricao FROM kits_anuncio k 
+        JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
+        WHERE k.id_ml_anuncio = ? LIMIT 1
+      `);
+
       let gerados = 0;
       anuncios.forEach((anuncio, idx) => {
-        const descRow = db.prepare(`
-          SELECT d.descricao FROM kits_anuncio k 
-          JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
-          WHERE k.id_ml_anuncio = ? LIMIT 1
-        `).get(anuncio.id_ml);
+        const descRow = stmtDesc.get(anuncio.id_ml);
 
         const descComponente = descRow ? descRow.descricao : 'Kit de Suspensão Automotiva';
         const orderId = '20000' + Math.floor(1000000 + Math.random() * 9000000);

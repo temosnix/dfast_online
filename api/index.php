@@ -3,10 +3,30 @@
 // DFAST ONLINE - API REST EM PHP (HOSTGATOR PLANO TURBO NATIVO)
 // ================================================================
 
+// Cabeçalhos de Segurança HTTP Estritos
 header('Content-Type: application/json; charset=utf-8');
-header('Access-Control-Allow-Origin: *');
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('X-XSS-Protection: 1; mode=block');
+header('Referrer-Policy: strict-origin-when-cross-origin');
+
+// Controle Seguro de CORS (Evita Acesso Indevido de Sites Terceiros)
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+if (!empty($origin)) {
+    $originHost = parse_url($origin, PHP_URL_HOST);
+    $serverHost = $_SERVER['HTTP_HOST'] ?? '';
+    // Permitir se vier de localhost ou do mesmo domínio da aplicação
+    if (in_array($originHost, ['localhost', '127.0.0.1']) || $originHost === $serverHost) {
+        header("Access-Control-Allow-Origin: {$origin}");
+    } else {
+        header('Access-Control-Allow-Origin: null');
+    }
+} else {
+    header('Access-Control-Allow-Origin: *');
+}
+
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With');
+header('Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-API-Key');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
@@ -232,14 +252,14 @@ try {
     // ROTA: /api/stock/update (Atualizar Saldo ou Localização)
     // -------------------------------------------------------------
     if ($route === 'stock/update' && $method === 'POST') {
-        $idNissi = $input['id_nissi'] ?? '';
-        $saldo = isset($input['saldo_atual']) ? (int)$input['saldo_atual'] : null;
-        $minimo = isset($input['estoque_minimo']) ? (int)$input['estoque_minimo'] : null;
-        $novoLocal = isset($input['local']) ? trim($input['local']) : null;
+        $idNissi = isset($input['id_nissi']) ? substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['id_nissi'])), 0, 30) : '';
+        $saldo = isset($input['saldo_atual']) ? max(0, min(1000000, (int)$input['saldo_atual'])) : null;
+        $minimo = isset($input['estoque_minimo']) ? max(0, min(100000, (int)$input['estoque_minimo'])) : null;
+        $novoLocal = isset($input['local']) ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['local'])), 0, 15)) : null;
 
         if (!$idNissi) {
             http_response_code(400);
-            echo json_encode(['error' => 'id_nissi é obrigatório']);
+            echo json_encode(['error' => 'id_nissi é obrigatório e deve ser alfanumérico']);
             exit;
         }
 
@@ -392,14 +412,16 @@ try {
             VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :envio_tipo, 'ready_to_ship', 'pendente')
         ");
 
+        $stmtDesc = $pdo->prepare("
+            SELECT d.descricao FROM kits_anuncio k 
+            JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
+            WHERE k.id_ml_anuncio = ? LIMIT 1
+        ");
+
         $gerados = 0;
         foreach ($anuncios as $idx => $anuncio) {
-            // Obter descrição do primeiro componente para título do pedido
-            $descComponente = $pdo->query("
-                SELECT d.descricao FROM kits_anuncio k 
-                JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
-                WHERE k.id_ml_anuncio = '{$anuncio['id_ml']}' LIMIT 1
-            ")->fetchColumn() ?: 'Kit de Suspensão Automotiva';
+            $stmtDesc->execute([$anuncio['id_ml']]);
+            $descComponente = $stmtDesc->fetchColumn() ?: 'Kit de Suspensão Automotiva';
 
             $orderId = '20000' . rand(1000000, 9999999);
             $tipoEnvio = ($idx % 2 === 0) ? 'flex' : 'coleta'; // Metade Flex (mesmo dia), metade Coleta
@@ -437,6 +459,10 @@ try {
     http_response_code(404);
     echo json_encode(['error' => "Rota '/api/{$route}' não encontrada."]);
 } catch (Exception $e) {
+    error_log("Dfast API Error: " . $e->getMessage());
     http_response_code(500);
-    echo json_encode(['error' => 'Erro interno na API: ' . $e->getMessage()]);
+    $debug = getenv('APP_DEBUG') === 'true';
+    echo json_encode([
+        'error' => $debug ? $e->getMessage() : 'Ocorreu um erro interno ao processar a requisição no servidor.'
+    ]);
 }
