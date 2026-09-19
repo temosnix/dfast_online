@@ -16,7 +16,8 @@ import {
   PurchaseItem, 
   MLConfig,
   UnregisteredAd,
-  PickingCounts
+  PickingCounts,
+  SlaOption
 } from './types';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
@@ -34,6 +35,8 @@ export default function App() {
   const [dataGeracao, setDataGeracao] = useState('');
   const [mlConfig, setMlConfig] = useState<MLConfig | null>(null);
   const [tipoOrigem, setTipoOrigem] = useState<'nissi' | 'producao' | 'todos'>('nissi');
+  const [selectedSla, setSelectedSla] = useState<string>('todos');
+  const [availableSlas, setAvailableSlas] = useState<SlaOption[]>([]);
   const [pickingCounts, setPickingCounts] = useState<PickingCounts>({ nissi: 0, producao: 0, todos: 0 });
 
   const [loading, setLoading] = useState(true);
@@ -54,11 +57,11 @@ export default function App() {
     setIsRegisterOpen(true);
   };
 
-  const loadData = async (tipo: 'nissi' | 'producao' | 'todos' = tipoOrigem) => {
+  const loadData = async (tipo: 'nissi' | 'producao' | 'todos' = tipoOrigem, sla: string = selectedSla) => {
     try {
       const [statsRes, pickingRes, mlConfigRes, unregRes, stockRes] = await Promise.all([
         fetch('/api/stats'),
-        fetch(`/api/picking?tipo=${tipo}`),
+        fetch(`/api/picking?tipo=${tipo}&sla=${sla}`),
         fetch('/api/mercadolivre/config'),
         fetch('/api/anuncios/unregistered'),
         fetch('/api/stock'),
@@ -75,6 +78,7 @@ export default function App() {
         setRotaConsolidada(d.rota_consolidada || []);
         setCaixasNecessarias(d.caixas_necessarias || []);
         if (d.counts) setPickingCounts(d.counts);
+        if (d.available_slas) setAvailableSlas(d.available_slas);
       }
 
       if (mlConfigRes.ok) {
@@ -139,13 +143,31 @@ export default function App() {
   const handleChangeTipoOrigem = async (novoTipo: 'nissi' | 'producao' | 'todos') => {
     setTipoOrigem(novoTipo);
     try {
-      const pickingRes = await fetch(`/api/picking?tipo=${novoTipo}`);
+      const pickingRes = await fetch(`/api/picking?tipo=${novoTipo}&sla=${selectedSla}`);
       if (pickingRes.ok) {
         const d = await pickingRes.json();
         setPedidos(d.pedidos || []);
         setRotaConsolidada(d.rota_consolidada || []);
         setCaixasNecessarias(d.caixas_necessarias || []);
         if (d.counts) setPickingCounts(d.counts);
+        if (d.available_slas) setAvailableSlas(d.available_slas);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleChangeSla = async (novoSla: string) => {
+    setSelectedSla(novoSla);
+    try {
+      const pickingRes = await fetch(`/api/picking?tipo=${tipoOrigem}&sla=${novoSla}`);
+      if (pickingRes.ok) {
+        const d = await pickingRes.json();
+        setPedidos(d.pedidos || []);
+        setRotaConsolidada(d.rota_consolidada || []);
+        setCaixasNecessarias(d.caixas_necessarias || []);
+        if (d.counts) setPickingCounts(d.counts);
+        if (d.available_slas) setAvailableSlas(d.available_slas);
       }
     } catch (err) {
       console.error(err);
@@ -290,6 +312,9 @@ export default function App() {
                 onChangeTipoOrigem={handleChangeTipoOrigem}
                 pickingCounts={pickingCounts}
                 stats={stats}
+                availableSlas={availableSlas}
+                selectedSla={selectedSla}
+                onChangeSla={handleChangeSla}
               />
             )}
 

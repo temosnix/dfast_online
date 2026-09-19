@@ -15,9 +15,10 @@ import {
   ChevronRight,
   AlertTriangle,
   PlusCircle,
-  Search
+  Search,
+  Calendar
 } from 'lucide-react';
-import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd, Stats, PickingCounts } from '../types';
+import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd, Stats, PickingCounts, SlaOption } from '../types';
 
 interface PickingViewProps {
   pedidos: Pedido[];
@@ -31,6 +32,9 @@ interface PickingViewProps {
   onChangeTipoOrigem?: (tipo: 'nissi' | 'producao' | 'todos') => void;
   pickingCounts?: PickingCounts;
   stats?: Stats | null;
+  availableSlas?: SlaOption[];
+  selectedSla?: string;
+  onChangeSla?: (sla: string) => void;
 }
 
 export const PickingView: React.FC<PickingViewProps> = ({
@@ -45,6 +49,9 @@ export const PickingView: React.FC<PickingViewProps> = ({
   onChangeTipoOrigem,
   pickingCounts,
   stats,
+  availableSlas = [],
+  selectedSla = 'todos',
+  onChangeSla,
 }) => {
   const [viewMode, setViewMode] = useState<'rota' | 'pedidos'>('rota');
   const [filterType, setFilterType] = useState<'all' | 'flex' | 'coleta'>('all');
@@ -277,6 +284,53 @@ export const PickingView: React.FC<PickingViewProps> = ({
           <span className="text-[11px] text-purple-300 font-medium px-3 py-1 rounded-lg bg-purple-500/10 border border-purple-500/20">
             ✓ Visão consolidada de todas as vendas do dia
           </span>
+        )}
+
+        {/* SLA Dispatch Date Selector (Algoritmo Oficial api.py) */}
+        {availableSlas && availableSlas.length > 0 && (
+          <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium mr-1">
+              <Calendar className="w-3.5 h-3.5 text-sky-400" />
+              <span>Despacho / Coleta SLA:</span>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onChangeSla?.('todos')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  selectedSla === 'todos' || !selectedSla
+                    ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20 ring-1 ring-sky-400'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+                }`}
+              >
+                Todas as Datas ({availableSlas.reduce((acc, s) => acc + s.count, 0)})
+              </button>
+
+              {availableSlas.map((slaOpt) => {
+                const isSelected = selectedSla === slaOpt.date;
+                return (
+                  <button
+                    key={slaOpt.date}
+                    type="button"
+                    onClick={() => onChangeSla?.(slaOpt.date)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20 ring-1 ring-sky-400'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-800'
+                    }`}
+                  >
+                    <span>{slaOpt.label}</span>
+                    <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-mono font-black ${
+                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-800 text-sky-300'
+                    }`}>
+                      {slaOpt.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         )}
       </div>
 
@@ -546,6 +600,14 @@ export const PickingView: React.FC<PickingViewProps> = ({
                               ⏳ Aguardando Liberação
                             </span>
                           ) : null}
+
+                          {/* SLA Expected Date Badge */}
+                          {pedido.sla_expected_date && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[10px] font-semibold">
+                              <Calendar className="w-3 h-3 text-indigo-400" />
+                              <span>SLA: {pedido.sla_expected_date}{pedido.sla_expected_time ? ` (${pedido.sla_expected_time})` : ''}</span>
+                            </span>
+                          )}
 
                           {/* Box Badge / Unregistered Indicator */}
                           {pedido.cadastrado === false ? (

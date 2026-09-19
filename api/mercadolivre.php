@@ -218,8 +218,8 @@ class MercadoLivreClient {
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO pedidos_vendas 
-            (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking, separado_em)
-            VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :data_venda, :envio_tipo, :envio_status, :status_picking, :separado_em)
+            (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, sla_expected_date, sla_expected_time, status_picking, separado_em)
+            VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :data_venda, :envio_tipo, :envio_status, :sla_expected_date, :sla_expected_time, :status_picking, :separado_em)
         ");
 
         $this->pdo->beginTransaction();
@@ -233,14 +233,21 @@ class MercadoLivreClient {
                 $shippingMode = $shipping['shipping_mode'] ?? 'normal';
                 $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
                 $envioStatus = 'ready_to_ship';
+                $slaExpectedDate = null;
+                $slaExpectedTime = null;
 
-                // Se possuir envio identificado, verifica logistic_type real na API de envios
+                // Se possuir envio identificado, verifica logistic_type e SLA real na API
                 if (!empty($shippingId)) {
                     if (isset($shipmentCache[$shippingId])) {
                         $envioTipo = $shipmentCache[$shippingId]['envioTipo'];
                         $envioStatus = $shipmentCache[$shippingId]['envioStatus'];
+                        $slaExpectedDate = $shipmentCache[$shippingId]['slaExpectedDate'];
+                        $slaExpectedTime = $shipmentCache[$shippingId]['slaExpectedTime'];
                     } else {
                         $shipmentData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}", [], [
+                            "Authorization: Bearer {$accessToken}"
+                        ]);
+                        $slaData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}/sla", [], [
                             "Authorization: Bearer {$accessToken}"
                         ]);
 
@@ -254,11 +261,17 @@ class MercadoLivreClient {
                                 }
                             }
                             $envioStatus = $shipmentData['status'] ?? 'ready_to_ship';
-                            $shipmentCache[$shippingId] = [
-                                'envioTipo' => $envioTipo,
-                                'envioStatus' => $envioStatus
-                            ];
                         }
+                        if (!isset($slaData['error']) && !empty($slaData['expected_date'])) {
+                            $slaExpectedDate = substr($slaData['expected_date'], 0, 10);
+                            $slaExpectedTime = substr($slaData['expected_date'], 11, 5);
+                        }
+                        $shipmentCache[$shippingId] = [
+                            'envioTipo' => $envioTipo,
+                            'envioStatus' => $envioStatus,
+                            'slaExpectedDate' => $slaExpectedDate,
+                            'slaExpectedTime' => $slaExpectedTime,
+                        ];
                     }
                 }
 
@@ -315,6 +328,8 @@ class MercadoLivreClient {
                         'data_venda' => $dateCreated,
                         'envio_tipo' => $envioTipo,
                         'envio_status' => $envioStatus,
+                        'sla_expected_date' => $slaExpectedDate,
+                        'sla_expected_time' => $slaExpectedTime,
                         'status_picking' => $initialStatus,
                         'separado_em' => $separadoEm,
                     ]);

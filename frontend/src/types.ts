@@ -33,6 +33,13 @@ export interface ComponentePedido {
   saldo_atual: number;
 }
 
+export interface SlaOption {
+  date: string;
+  count: number;
+  pendentes: number;
+  label: string;
+}
+
 export interface Pedido {
   id: number;
   order_id: string;
@@ -43,6 +50,8 @@ export interface Pedido {
   data_venda: string;
   envio_tipo: 'flex' | 'coleta' | 'normal';
   envio_status: string;
+  sla_expected_date?: string | null;
+  sla_expected_time?: string | null;
   status_picking: 'pendente' | 'separado';
   separado_em: string | null;
   kit?: string;

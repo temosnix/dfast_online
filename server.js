@@ -99,6 +99,8 @@ try {
       data_venda DATETIME DEFAULT CURRENT_TIMESTAMP,
       envio_tipo TEXT DEFAULT 'flex',
       envio_status TEXT DEFAULT 'ready_to_ship',
+      sla_expected_date TEXT,
+      sla_expected_time TEXT,
       status_picking TEXT DEFAULT 'pendente',
       separado_em DATETIME,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -118,6 +120,19 @@ try {
       criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Migração de colunas para SLA em pedidos_vendas
+  try {
+    const tableCols = db.prepare("PRAGMA table_info(pedidos_vendas)").all().map(c => c.name);
+    if (!tableCols.includes('sla_expected_date')) {
+      db.exec("ALTER TABLE pedidos_vendas ADD COLUMN sla_expected_date TEXT");
+    }
+    if (!tableCols.includes('sla_expected_time')) {
+      db.exec("ALTER TABLE pedidos_vendas ADD COLUMN sla_expected_time TEXT");
+    }
+  } catch (e) {
+    console.warn('[Dfast Online] Verificação de colunas SLA:', e.message);
+  }
 
   const countRow = db.prepare("SELECT COUNT(*) as count FROM estoque_saldos").get();
   if (countRow.count === 0) {
@@ -268,17 +283,70 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 2. /api/picking (Separação com suporte a filtro de origem)
+  // 2. /api/picking (Separação com suporte a filtro de origem e SLA de envio)
   if (pathname === '/api/picking' && req.method === 'GET') {
     try {
       const tipo = parsedUrl.searchParams.get('tipo') || 'nissi'; // 'nissi' (padrão: almoxarifado), 'producao', 'todos'
+      const sla = parsedUrl.searchParams.get('sla') || 'todos'; // 'hoje', 'proximo', 'todos' ou data específica 'YYYY-MM-DD'
 
-      let sqlWhere = '';
+      const todayStr = new Date().toISOString().slice(0, 10);
+
+      // Descobre a próxima data de SLA disponível (>= hoje)
+      const nextSlaRow = db.prepare(`
+        SELECT sla_expected_date 
+        FROM pedidos_vendas 
+        WHERE sla_expected_date IS NOT NULL AND sla_expected_date >= ?
+        ORDER BY sla_expected_date ASC LIMIT 1
+      `).get(todayStr);
+      const nextSlaDate = nextSlaRow ? nextSlaRow.sla_expected_date : null;
+
+      // Lista de SLAs disponíveis no banco de dados com contagens
+      const availableSlasRaw = db.prepare(`
+        SELECT 
+          COALESCE(p.sla_expected_date, 'Sem Data') as date,
+          COUNT(*) as count,
+          SUM(CASE WHEN p.status_picking = 'pendente' THEN 1 ELSE 0 END) as pendentes
+        FROM pedidos_vendas p
+        GROUP BY COALESCE(p.sla_expected_date, 'Sem Data')
+        ORDER BY p.sla_expected_date ASC
+      `).all();
+
+      const availableSlas = availableSlasRaw.map(s => {
+        let label = s.date;
+        if (s.date === todayStr) {
+          label = `Hoje (${s.date})`;
+        } else if (s.date === nextSlaDate) {
+          label = `Próximo (${s.date})`;
+        }
+        return { ...s, label };
+      });
+
+      // Filtros dinâmicos da query de pedidos
+      const whereClauses = [];
+      const queryParams = [];
+
       if (tipo === 'nissi') {
-        sqlWhere = "WHERE (a.kit = 'S' OR a.id_ml IS NULL)";
+        whereClauses.push("(a.kit = 'S' OR a.id_ml IS NULL)");
       } else if (tipo === 'producao') {
-        sqlWhere = "WHERE a.kit = 'N'";
+        whereClauses.push("a.kit = 'N'");
       }
+
+      let activeSlaDate = null;
+      if (sla === 'hoje') {
+        whereClauses.push("p.sla_expected_date = ?");
+        queryParams.push(todayStr);
+        activeSlaDate = todayStr;
+      } else if (sla === 'proximo' && nextSlaDate) {
+        whereClauses.push("p.sla_expected_date = ?");
+        queryParams.push(nextSlaDate);
+        activeSlaDate = nextSlaDate;
+      } else if (sla && sla !== 'todos' && sla !== 'all') {
+        whereClauses.push("p.sla_expected_date = ?");
+        queryParams.push(sla);
+        activeSlaDate = sla;
+      }
+
+      const sqlWhere = whereClauses.length > 0 ? 'WHERE ' + whereClauses.join(' AND ') : '';
 
       const pedidos = db.prepare(`
         SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
@@ -289,7 +357,7 @@ const server = http.createServer(async (req, res) => {
           CASE WHEN p.envio_tipo = 'flex' THEN 0 ELSE 1 END,
           p.status_picking ASC,
           p.id ASC
-      `).all();
+      `).all(...queryParams);
 
       const stmtComponents = db.prepare(`
         SELECT 
@@ -310,6 +378,15 @@ const server = http.createServer(async (req, res) => {
         ped.componentes = stmtComponents.all(ped.quantidade, ped.ml_item_id);
       }
 
+      // Rota consolidada e caixas filtradas pelo SLA selecionado (recalcula a localização real nas prateleiras)
+      const rotaWhereClauses = ["p.status_picking = 'pendente'"];
+      const rotaParams = [];
+
+      if (activeSlaDate) {
+        rotaWhereClauses.push("p.sla_expected_date = ?");
+        rotaParams.push(activeSlaDate);
+      }
+
       const rotaConsolidada = db.prepare(`
         SELECT 
           COALESCE(d.local, 'S/L') as local,
@@ -323,10 +400,10 @@ const server = http.createServer(async (req, res) => {
         JOIN kits_anuncio k ON p.ml_item_id = k.id_ml_anuncio
         JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
         LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
-        WHERE p.status_picking = 'pendente'
+        WHERE ${rotaWhereClauses.join(' AND ')}
         GROUP BY COALESCE(d.local, 'S/L'), k.id_kit_nissi
         ORDER BY COALESCE(d.local, 'S/L') ASC, k.id_kit_nissi ASC
-      `).all();
+      `).all(...rotaParams);
 
       const caixasNecessarias = db.prepare(`
         SELECT 
@@ -334,30 +411,37 @@ const server = http.createServer(async (req, res) => {
           SUM(p.quantidade) as total_caixas
         FROM pedidos_vendas p
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
-        WHERE p.status_picking = 'pendente'
+        WHERE ${rotaWhereClauses.join(' AND ')}
         GROUP BY a.caixa
         ORDER BY a.caixa ASC
-      `).all();
+      `).all(...rotaParams);
 
       const countNissi = db.prepare(`
         SELECT COUNT(*) as c FROM pedidos_vendas p
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
-        WHERE (a.kit = 'S' OR a.id_ml IS NULL)
-      `).get().c;
+        WHERE (a.kit = 'S' OR a.id_ml IS NULL) ${activeSlaDate ? 'AND p.sla_expected_date = ?' : ''}
+      `).get(...(activeSlaDate ? [activeSlaDate] : [])).c;
 
       const countProducao = db.prepare(`
         SELECT COUNT(*) as c FROM pedidos_vendas p
         JOIN anuncios a ON p.ml_item_id = a.id_ml
-        WHERE a.kit = 'N'
-      `).get().c;
+        WHERE a.kit = 'N' ${activeSlaDate ? 'AND p.sla_expected_date = ?' : ''}
+      `).get(...(activeSlaDate ? [activeSlaDate] : [])).c;
 
-      const countTodos = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas").get().c;
+      const countTodos = db.prepare(`
+        SELECT COUNT(*) as c FROM pedidos_vendas p
+        ${activeSlaDate ? 'WHERE p.sla_expected_date = ?' : ''}
+      `).get(...(activeSlaDate ? [activeSlaDate] : [])).c;
 
       return sendJson(res, 200, {
         success: true,
         pedidos,
         rota_consolidada: rotaConsolidada,
         caixas_necessarias: caixasNecessarias,
+        available_slas: availableSlas,
+        selected_sla: sla,
+        active_sla_date: activeSlaDate,
+        next_sla_date: nextSlaDate,
         counts: {
           nissi: countNissi,
           producao: countProducao,
@@ -1180,8 +1264,8 @@ const server = http.createServer(async (req, res) => {
 
       const stmtInsert = db.prepare(`
         INSERT OR REPLACE INTO pedidos_vendas 
-        (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, status_picking, separado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (order_id, ml_item_id, titulo, quantidade, comprador, data_venda, envio_tipo, envio_status, sla_expected_date, sla_expected_time, status_picking, separado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const validOrderIds = new Set();
@@ -1195,21 +1279,34 @@ const server = http.createServer(async (req, res) => {
           const shippingId = String(shipping.id || '');
           let envioTipo = (shipping.shipping_mode && (shipping.shipping_mode.includes('self_service') || shipping.shipping_mode.includes('turbo'))) ? 'flex' : 'coleta';
           let envioStatus = 'ready_to_ship';
+          let slaExpectedDate = null;
+          let slaExpectedTime = null;
 
-          // Verificação de modalidade real de logística com cache por shipping_id
+          // Verificação de modalidade real de logística e SLA com cache por shipping_id
           if (shippingId) {
             if (shipmentCache.has(shippingId)) {
               const cached = shipmentCache.get(shippingId);
               envioTipo = cached.envioTipo;
               envioStatus = cached.envioStatus;
+              slaExpectedDate = cached.slaExpectedDate;
+              slaExpectedTime = cached.slaExpectedTime;
             } else {
               try {
-                const shipRes = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
-                  headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
-                  }
-                });
+                const [shipRes, slaRes] = await Promise.all([
+                  fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+                    headers: {
+                      'Authorization': `Bearer ${accessToken}`,
+                      'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+                    }
+                  }),
+                  fetch(`https://api.mercadolibre.com/shipments/${shippingId}/sla`, {
+                    headers: {
+                      'Authorization': `Bearer ${accessToken}`,
+                      'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+                    }
+                  })
+                ]);
+
                 if (shipRes.ok) {
                   const shipData = await shipRes.json();
                   if (shipData.logistic_type === 'self_service' || (shipData.logistic_type && shipData.logistic_type.includes('turbo'))) {
@@ -1218,8 +1315,17 @@ const server = http.createServer(async (req, res) => {
                     envioTipo = 'coleta';
                   }
                   envioStatus = shipData.status || 'ready_to_ship';
-                  shipmentCache.set(shippingId, { envioTipo, envioStatus });
                 }
+
+                if (slaRes.ok) {
+                  const slaData = await slaRes.json();
+                  if (slaData.expected_date) {
+                    slaExpectedDate = slaData.expected_date.slice(0, 10);
+                    slaExpectedTime = slaData.expected_date.slice(11, 16);
+                  }
+                }
+
+                shipmentCache.set(shippingId, { envioTipo, envioStatus, slaExpectedDate, slaExpectedTime });
               } catch (e) {
                 // mantém fallback seguro
               }
@@ -1270,6 +1376,8 @@ const server = http.createServer(async (req, res) => {
               dateCreated,
               envioTipo,
               envioStatus,
+              slaExpectedDate,
+              slaExpectedTime,
               initialStatus,
               separadoEm
             );
