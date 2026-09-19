@@ -1,0 +1,20 @@
+{
+  "name": "dfast_online",
+  "version": "1.0.0",
+  "description": "Sistema de Gestão de Estoque, Picking e Integração Mercado Livre para HostGator",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build:frontend": "cd frontend && npm install && npm run build"
+  },
+  "keywords": [
+    "mercado-livre",
+    "picking",
+    "estoque",
+    "hostgator",
+    "wms"
+  ],
+  "author": "Danilo Ivanoff",
+  "license": "MIT"
+}

@@ -1,0 +1,6 @@
+# Bloqueio total de acesso HTTP aos arquivos de banco de dados
+<FilesMatch ".*">
+    Require all denied
+    Order deny,allow
+    Deny from all
+</FilesMatch>

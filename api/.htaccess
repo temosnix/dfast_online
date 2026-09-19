@@ -1,0 +1,29 @@
+# ========================================================
+# DFAST ONLINE - CONFIGURAÇÃO APACHE / HOSTGATOR
+# ========================================================
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /api/
+
+    # Bloquear acesso direto a arquivos de banco de dados e configurações
+    RewriteRule \.(db|sqlite|sqlite3|env|json|lock)$ - [F,L]
+
+    # Permitir arquivos e pastas existentes
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # Encaminhar todas as rotas para o index.php
+    RewriteRule ^(.*)$ index.php?route=$1 [QSA,L]
+</IfModule>
+
+# Proibir visualização de diretórios
+Options -Indexes
+
+# Headers de Segurança
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>

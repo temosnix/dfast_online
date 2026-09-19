@@ -1,0 +1,44 @@
+# ==========================================
+# SEGURANÇA E DADOS PRIVADOS (CRÍTICO)
+# ==========================================
+# Arquivos de ambiente e credenciais da API Mercado Livre
+.env
+.env.*
+!.env.example
+credentials.json
+mercadolivre_tokens.json
+config/credentials.json
+config/tokens.json
+tokens.json
+
+# Bancos de dados locais SQLite e temporários
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+database/*.db
+database/*.sqlite
+data/
+banco/
+
+# ==========================================
+# DEPENDÊNCIAS E BUILDS
+# ==========================================
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Logs e arquivos de sistema
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
