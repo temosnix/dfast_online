@@ -34,20 +34,22 @@ export const StockView: React.FC<StockViewProps> = ({ stock, onUpdateStock, load
   const aisles = Array.from(
     new Set(
       stock
-        .map(i => i.local ? i.local.charAt(0).toUpperCase() : '')
+        .map(i => (i.local && typeof i.local === 'string') ? i.local.charAt(0).toUpperCase() : '')
         .filter(Boolean)
     )
   ).sort();
 
   const filteredStock = stock.filter(item => {
-    const matchesSearch = 
-      item.id_nissi.toLowerCase().includes(search.toLowerCase()) ||
-      item.descricao.toLowerCase().includes(search.toLowerCase()) ||
-      item.local.toLowerCase().includes(search.toLowerCase());
+    const q = (search || '').toLowerCase().trim();
+    const idStr = String(item.id_nissi ?? '').toLowerCase();
+    const descStr = String(item.descricao ?? '').toLowerCase();
+    const localStr = String(item.local ?? '').toLowerCase();
+
+    const matchesSearch = !q || idStr.includes(q) || descStr.includes(q) || localStr.includes(q);
 
     const matchesAisle = 
       selectedAisle === 'all' || 
-      (item.local && item.local.toUpperCase().startsWith(selectedAisle));
+      (Boolean(item.local) && String(item.local).toUpperCase().startsWith(selectedAisle));
 
     return matchesSearch && matchesAisle;
   });

@@ -8,7 +8,8 @@ import {
   Sparkles, 
   Clock, 
   Building2,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Search
 } from 'lucide-react';
 import { PurchaseItem } from '../types';
 
@@ -27,16 +28,26 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [filterUrgencia, setFilterUrgencia] = useState<'all' | 'urgente' | 'preventiva'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const totalItens = purchases.length;
-  const urgentes = purchases.filter(p => p.urgencia.includes('URGENTE')).length;
+  const urgentes = purchases.filter(p => String(p.urgencia || '').includes('URGENTE')).length;
   const preventivos = totalItens - urgentes;
   const totalPecas = purchases.reduce((acc, curr) => acc + curr.sugestao_compra, 0);
 
   const filteredPurchases = purchases.filter(p => {
-    if (filterUrgencia === 'urgente') return p.urgencia.includes('URGENTE');
-    if (filterUrgencia === 'preventiva') return p.urgencia.includes('Preventiva');
-    return true;
+    const urg = String(p.urgencia || '');
+    if (filterUrgencia === 'urgente' && !urg.includes('URGENTE')) return false;
+    if (filterUrgencia === 'preventiva' && !urg.includes('Preventiva')) return false;
+
+    const q = (searchQuery || '').toLowerCase().trim();
+    if (!q) return true;
+
+    const idStr = String(p.id_nissi ?? '').toLowerCase();
+    const descStr = String(p.descricao ?? '').toLowerCase();
+    const localStr = String(p.local ?? '').toLowerCase();
+
+    return idStr.includes(q) || descStr.includes(q) || localStr.includes(q);
   });
 
   const handleCopyWhatsApp = () => {
@@ -118,38 +129,52 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
         </div>
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex items-center gap-2 bg-slate-900/40 p-2 rounded-2xl border border-slate-800 no-print">
-        <button
-          onClick={() => setFilterUrgencia('all')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-            filterUrgencia === 'all'
-              ? 'bg-sky-500 text-white'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          Todos ({totalItens})
-        </button>
-        <button
-          onClick={() => setFilterUrgencia('urgente')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-            filterUrgencia === 'urgente'
-              ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          🚨 Falta Imediata ({urgentes})
-        </button>
-        <button
-          onClick={() => setFilterUrgencia('preventiva')}
-          className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
-            filterUrgencia === 'preventiva'
-              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-              : 'text-slate-400 hover:text-white'
-          }`}
-        >
-          ⚠️ Reposição Preventiva ({preventivos})
-        </button>
+      {/* Filter Tabs & Search */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-900/40 p-2 rounded-2xl border border-slate-800 no-print">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setFilterUrgencia('all')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+              filterUrgencia === 'all'
+                ? 'bg-sky-500 text-white'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Todos ({totalItens})
+          </button>
+          <button
+            onClick={() => setFilterUrgencia('urgente')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+              filterUrgencia === 'urgente'
+                ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            🚨 Falta Imediata ({urgentes})
+          </button>
+          <button
+            onClick={() => setFilterUrgencia('preventiva')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+              filterUrgencia === 'preventiva'
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            ⚠️ Reposição Preventiva ({preventivos})
+          </button>
+        </div>
+
+        {/* Search Input */}
+        <div className="relative min-w-[240px]">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            placeholder="Filtrar por código Nissi, peça ou local..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50 transition-all"
+          />
+        </div>
       </div>
 
       {/* Purchase Items Table */}

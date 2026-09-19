@@ -73,11 +73,14 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
 
   const CAIXAS_SUGERIDAS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
 
-  const filteredStock = stockList.filter(item => 
-    item.id_nissi.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.descricao.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.local.toLowerCase().includes(searchTerm.toLowerCase())
-  ).slice(0, 15);
+  const filteredStock = stockList.filter(item => {
+    const q = (searchTerm || '').toLowerCase().trim();
+    if (!q) return true;
+    const idStr = String(item.id_nissi ?? '').toLowerCase();
+    const descStr = String(item.descricao ?? '').toLowerCase();
+    const localStr = String(item.local ?? '').toLowerCase();
+    return idStr.includes(q) || descStr.includes(q) || localStr.includes(q);
+  }).slice(0, 15);
 
   const handleAddComponent = (item: StockItem) => {
     if (componentes.some(c => c.id_kit_nissi === item.id_nissi)) {
@@ -90,7 +93,7 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
       {
         id_kit_nissi: item.id_nissi,
         descricao: item.descricao,
-        local: item.local,
+        local: item.local || 'S/L',
         qtd_kit: 1,
       }
     ]);

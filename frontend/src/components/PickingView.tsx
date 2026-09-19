@@ -14,7 +14,8 @@ import {
   ExternalLink,
   ChevronRight,
   AlertTriangle,
-  PlusCircle
+  PlusCircle,
+  Search
 } from 'lucide-react';
 import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd } from '../types';
 
@@ -39,6 +40,7 @@ export const PickingView: React.FC<PickingViewProps> = ({
 }) => {
   const [viewMode, setViewMode] = useState<'rota' | 'pedidos'>('rota');
   const [filterType, setFilterType] = useState<'all' | 'flex' | 'coleta'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const totalPedidos = pedidos.length;
   const separados = pedidos.filter(p => p.status_picking === 'separado').length;
@@ -47,9 +49,31 @@ export const PickingView: React.FC<PickingViewProps> = ({
   const flexPendentes = pedidos.filter(p => p.envio_tipo === 'flex' && p.status_picking === 'pendente').length;
 
   const pedidosFiltrados = pedidos.filter(p => {
-    if (filterType === 'flex') return p.envio_tipo === 'flex';
-    if (filterType === 'coleta') return p.envio_tipo === 'coleta' || p.envio_tipo === 'normal';
-    return true;
+    if (filterType === 'flex' && p.envio_tipo !== 'flex') return false;
+    if (filterType === 'coleta' && (p.envio_tipo !== 'coleta' && p.envio_tipo !== 'normal')) return false;
+
+    const q = (searchQuery || '').toLowerCase().trim();
+    if (!q) return true;
+
+    const orderIdMatch = String(p.order_id ?? '').toLowerCase().includes(q);
+    const itemMatch = String(p.ml_item_id ?? '').toLowerCase().includes(q);
+    const titleMatch = String(p.titulo ?? '').toLowerCase().includes(q);
+    const compMatch = String(p.comprador ?? '').toLowerCase().includes(q);
+    const caixaMatch = String(p.caixa ?? '').toLowerCase().includes(q);
+
+    return orderIdMatch || itemMatch || titleMatch || compMatch || caixaMatch;
+  });
+
+  const rotaFiltrada = rotaConsolidada.filter(item => {
+    const q = (searchQuery || '').toLowerCase().trim();
+    if (!q) return true;
+
+    const localMatch = String(item.local ?? '').toLowerCase().includes(q);
+    const nissiMatch = String(item.id_kit_nissi ?? '').toLowerCase().includes(q);
+    const descMatch = String(item.descricao ?? '').toLowerCase().includes(q);
+    const ordersMatch = String(item.pedidos_relacionados ?? '').toLowerCase().includes(q);
+
+    return localMatch || nissiMatch || descMatch || ordersMatch;
   });
 
   const handlePrint = () => {
@@ -197,44 +221,58 @@ export const PickingView: React.FC<PickingViewProps> = ({
           </button>
         </div>
 
-        {/* Filters and Print */}
-        <div className="flex items-center gap-2">
-          {viewMode === 'pedidos' && (
-            <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
-              <button
-                onClick={() => setFilterType('all')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                  filterType === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400'
-                }`}
-              >
-                Todos
-              </button>
-              <button
-                onClick={() => setFilterType('flex')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                  filterType === 'flex' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400'
-                }`}
-              >
-                ⚡ Só Flex
-              </button>
-              <button
-                onClick={() => setFilterType('coleta')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                  filterType === 'coleta' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400'
-                }`}
-              >
-                🚚 Só Coleta
-              </button>
-            </div>
-          )}
+        {/* Search & Filters */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1 justify-end">
+          {/* Search Box */}
+          <div className="relative min-w-[240px] flex-1 max-w-sm">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              placeholder={viewMode === 'rota' ? "Buscar prateleira, código Nissi ou peça..." : "Buscar por pedido, comprador, MLB..."}
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500/50 transition-all"
+            />
+          </div>
 
-          <button
-            onClick={handlePrint}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 shadow transition-all active:scale-95"
-          >
-            <Printer className="w-4 h-4" />
-            <span>Imprimir Lista de Coleta</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {viewMode === 'pedidos' && (
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800">
+                <button
+                  onClick={() => setFilterType('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                    filterType === 'all' ? 'bg-slate-800 text-white' : 'text-slate-400'
+                  }`}
+                >
+                  Todos
+                </button>
+                <button
+                  onClick={() => setFilterType('flex')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                    filterType === 'flex' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400'
+                  }`}
+                >
+                  ⚡ Só Flex
+                </button>
+                <button
+                  onClick={() => setFilterType('coleta')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${
+                    filterType === 'coleta' ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' : 'text-slate-400'
+                  }`}
+                >
+                  🚚 Só Coleta
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={handlePrint}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold border border-slate-700 shadow transition-all active:scale-95"
+            >
+              <Printer className="w-4 h-4" />
+              <span>Imprimir Lista de Coleta</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -252,15 +290,19 @@ export const PickingView: React.FC<PickingViewProps> = ({
               </p>
             </div>
             <span className="text-xs font-semibold text-slate-400">
-              {rotaConsolidada.length} itens distintos a retirar
+              {rotaFiltrada.length} itens distintos a retirar
             </span>
           </div>
 
-          {rotaConsolidada.length === 0 ? (
+          {rotaFiltrada.length === 0 ? (
             <div className="p-12 text-center text-slate-500">
               <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-500/40 mb-3" />
-              <p className="font-semibold text-slate-300">Tudo separado!</p>
-              <p className="text-xs mt-1">Nenhum item pendente de coleta no estoque no momento.</p>
+              <p className="font-semibold text-slate-300">
+                {searchQuery ? 'Nenhum item encontrado com esta busca.' : 'Tudo separado!'}
+              </p>
+              <p className="text-xs mt-1">
+                {searchQuery ? 'Tente buscar por outro código ou prateleira.' : 'Nenhum item pendente de coleta no estoque no momento.'}
+              </p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -277,7 +319,7 @@ export const PickingView: React.FC<PickingViewProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 text-xs">
-                  {rotaConsolidada.map((item, idx) => {
+                  {rotaFiltrada.map((item, idx) => {
                     const saldoSuficiente = item.saldo_atual >= item.total_a_retirar;
                     return (
                       <tr key={idx} className="hover:bg-slate-800/40 transition-colors">

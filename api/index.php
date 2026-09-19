@@ -119,7 +119,7 @@ try {
                     (k.qtd_kit * :qtd_pedido) as qtd_necessaria,
                     d.descricao,
                     d.unidade_medida,
-                    d.local,
+                    COALESCE(d.local, 'S/L') as local,
                     COALESCE(s.saldo_atual, 0) as saldo_atual
                 FROM kits_anuncio k
                 JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
@@ -137,7 +137,7 @@ try {
         // 2. Visão Consolidada por Localização no Galpão (Rota de Picking Otimizada)
         $consolidadoStmt = $pdo->query("
             SELECT 
-                d.local,
+                COALESCE(d.local, 'S/L') as local,
                 k.id_kit_nissi,
                 d.descricao,
                 d.unidade_medida,
@@ -149,8 +149,8 @@ try {
             JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
             LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
             WHERE p.status_picking = 'pendente'
-            GROUP BY d.local, k.id_kit_nissi
-            ORDER BY d.local ASC, k.id_kit_nissi ASC
+            GROUP BY COALESCE(d.local, 'S/L'), k.id_kit_nissi
+            ORDER BY COALESCE(d.local, 'S/L') ASC, k.id_kit_nissi ASC
         ");
         $consolidado = $consolidadoStmt->fetchAll();
 
@@ -224,7 +224,7 @@ try {
                 d.id_nissi,
                 d.descricao,
                 d.unidade_medida,
-                d.local,
+                COALESCE(d.local, 'S/L') as local,
                 COALESCE(s.saldo_atual, 0) as saldo_atual,
                 COALESCE(s.estoque_minimo, 5) as estoque_minimo,
                 (
@@ -244,11 +244,11 @@ try {
         }
 
         if (!empty($localFilter)) {
-            $sql .= " AND d.local LIKE :local";
+            $sql .= " AND COALESCE(d.local, 'S/L') LIKE :local";
             $params['local'] = "%$localFilter%";
         }
 
-        $sql .= " ORDER BY d.local ASC, d.id_nissi ASC LIMIT 300";
+        $sql .= " ORDER BY COALESCE(d.local, 'S/L') ASC, d.id_nissi ASC LIMIT 300";
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
         $items = $stmt->fetchAll();
@@ -309,7 +309,7 @@ try {
                 d.id_nissi,
                 d.descricao,
                 d.unidade_medida,
-                d.local,
+                COALESCE(d.local, 'S/L') as local,
                 COALESCE(s.saldo_atual, 0) as saldo_atual,
                 COALESCE(s.estoque_minimo, 5) as estoque_minimo,
                 COALESCE(demanda.total_vendido, 0) as demanda_pendente,
