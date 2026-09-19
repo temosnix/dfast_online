@@ -185,6 +185,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
           </div>
 
+          {/* Status do Ciclo de Vida do Token (6 Horas) */}
+          {config?.has_access_token && config?.token_expires_at && (
+            <div className="bg-sky-500/10 border border-sky-500/20 rounded-xl p-2.5 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-sky-300">
+                <Clock className="w-3.5 h-3.5 text-sky-400" />
+                <span className="text-[11px] font-semibold">Validade do Token (Regra 6h):</span>
+              </div>
+              <span className="text-[11px] font-mono font-bold text-sky-200 bg-slate-950/60 px-2 py-0.5 rounded border border-slate-800">
+                Até {new Date(config.token_expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} (Auto-Refresh)
+              </span>
+            </div>
+          )}
+
           {/* Cutoff Times */}
           <div className="grid grid-cols-2 gap-3 pt-2">
             <div>

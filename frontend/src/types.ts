@@ -79,6 +79,7 @@ export interface MLConfig {
   has_refresh_token?: boolean;
   connected: boolean;
   encryption?: string;
+  token_expires_at?: number | null;
   flex_cutoff: string;
   coleta_cutoff: string;
 }

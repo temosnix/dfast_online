@@ -496,6 +496,7 @@ const server = http.createServer(async (req, res) => {
           has_refresh_token: !!refreshToken,
           connected: !!accessToken,
           encryption: 'AES-256-GCM (AEAD Autenticado)',
+          token_expires_at: configs['ml_token_expires_at'] ? parseInt(configs['ml_token_expires_at'], 10) : null,
           flex_cutoff: configs['flex_cutoff_hour'] || process.env.FLEX_CUTOFF_HOUR || '14:00',
           coleta_cutoff: configs['coleta_cutoff_hour'] || process.env.COLETA_CUTOFF_HOUR || '16:00',
         }

@@ -372,6 +372,7 @@ try {
                     'has_refresh_token' => !empty($refreshToken),
                     'connected' => !empty($accessToken),
                     'encryption' => 'AES-256-GCM (AEAD Autenticado)',
+                    'token_expires_at' => !empty($configs['ml_token_expires_at']) ? (int)$configs['ml_token_expires_at'] : null,
                     'flex_cutoff' => $configs['flex_cutoff_hour'] ?? getenv('FLEX_CUTOFF_HOUR') ?: '14:00',
                     'coleta_cutoff' => $configs['coleta_cutoff_hour'] ?? getenv('COLETA_CUTOFF_HOUR') ?: '16:00',
                 ]
