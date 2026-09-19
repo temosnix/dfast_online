@@ -28,3 +28,9 @@ Quando uma ordem for dada após o gatilho, a execução deve passar pelos especi
 ## 3. Log Linear Persistente (`SESSION_LOG.md`)
 - Centralizado em: `C:/Users/User/projetos/dev_squad/SESSION_LOG.md`
 - Mantém o histórico completo e linear das conversas e decisões da equipe mesmo após fechar o PowerShell.
+
+## 4. Portão Obrigatório de Pré-Autorização (Planning Gate)
+- **REGRA DE OURO:** Antes de iniciar QUALQUER implementação, edição de arquivos, alteração de código ou migração de banco de dados, o Tech Lead DEVE gerar diretamente na tela uma **lista ordenada das soluções planejadas por cada especialista da squad**.
+- **Aprovação Obrigatória:** A squad fica em espera e **NÃO DEVE** executar código ou alterar arquivos até que o Danilo analise a lista e forneça a sua autorização explícita (ex: *"autorizado"*, *"pode implementar"*, *"prossiga"*).
+- Caso o Danilo rejeite ou solicite ajustes em algum ponto, o plano deve ser revisto e reapresentado para nova autorização.
+
