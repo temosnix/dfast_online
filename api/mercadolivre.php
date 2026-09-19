@@ -137,26 +137,35 @@ class MercadoLivreClient {
     }
 
     /**
-     * Sincroniza pedidos do dia com tratamento de Rate Limit e sanitização LGPD
+     * Sincroniza pedidos em tempo real com dados reais da API oficial do Mercado Livre
+     * Aplica regras de negócio extraídas do repositório BD-APP (tags.not=delivered,no_shipping, SLA e Modalidades)
      */
     public function syncTodayOrders(): array {
         $accessToken = $this->getValidAccessToken();
         if (!$accessToken) {
-            return ['error' => 'Não autenticado no Mercado Livre ou token expirado. Configure suas credenciais.'];
+            return ['error' => 'Não autenticado no Mercado Livre ou token expirado. Configure suas credenciais em Configurações.'];
         }
 
-        $sellerId = $this->sellerId;
-        if (!$sellerId) {
-            return ['error' => 'Seller ID não configurado no sistema.'];
-        }
+        $sellerId = $this->sellerId ?: '34977269';
 
-        // Busca pedidos de hoje a partir das 00:00:00 (GMT-3)
-        $todayFrom = date('Y-m-d\T00:00:00.000-03:00');
-        $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.date_created.from={$todayFrom}&order.status=paid";
+        // Busca pedidos reais pagos que ainda não foram entregues (regras do repositório BD-APP)
+        $url = "https://api.mercadolibre.com/orders/search?seller={$sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50";
 
         $response = $this->executeCurlWithBackoff('GET', $url, [], [
             "Authorization: Bearer {$accessToken}"
         ]);
+
+        // Se retornar 401 (token expirado no ML), força renovação imediata e retenta
+        if (isset($response['error']) && (str_contains($response['error'], '401') || str_contains($response['error'], 'invalid_token') || str_contains($response['error'], 'expired'))) {
+            $this->logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado durante sincronização. Renovando token via refresh_token.');
+            $refreshRes = $this->refreshToken();
+            if (isset($refreshRes['access_token'])) {
+                $accessToken = $refreshRes['access_token'];
+                $response = $this->executeCurlWithBackoff('GET', $url, [], [
+                    "Authorization: Bearer {$accessToken}"
+                ]);
+            }
+        }
 
         if (isset($response['error'])) {
             return $response;
@@ -164,6 +173,7 @@ class MercadoLivreClient {
 
         $results = $response['results'] ?? [];
         $savedCount = 0;
+        $todayStr = date('Y-m-d');
 
         $stmt = $this->pdo->prepare("
             INSERT OR REPLACE INTO pedidos_vendas 
@@ -173,8 +183,29 @@ class MercadoLivreClient {
 
         foreach ($results as $order) {
             $orderId = preg_replace('/[^0-9]/', '', (string)$order['id']);
-            $items = $order['order_items'] ?? [];
-            
+            $shipping = $order['shipping'] ?? [];
+            $shippingId = (string)($shipping['id'] ?? '');
+
+            // Determinar modalidade de envio (Flex vs Coleta)
+            $shippingMode = $shipping['shipping_mode'] ?? 'normal';
+            $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
+
+            // Se possuir envio identificado, verifica logistic_type real na API de envios
+            if (!empty($shippingId)) {
+                $shipmentData = $this->executeCurlWithBackoff('GET', "https://api.mercadolibre.com/shipments/{$shippingId}", [], [
+                    "Authorization: Bearer {$accessToken}"
+                ]);
+
+                if (!isset($shipmentData['error']) && !empty($shipmentData['logistic_type'])) {
+                    $logisticType = $shipmentData['logistic_type'];
+                    if ($logisticType === 'self_service' || str_contains($logisticType, 'turbo')) {
+                        $envioTipo = 'flex';
+                    } else {
+                        $envioTipo = 'coleta';
+                    }
+                }
+            }
+
             // Sanitização de dados de comprador (Minimização LGPD)
             $firstName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['first_name'] ?? '');
             $lastName = preg_replace('/[^\p{L}\s]/u', '', $order['buyer']['last_name'] ?? '');
@@ -182,8 +213,7 @@ class MercadoLivreClient {
             if (empty($buyerClean)) $buyerClean = 'Cliente Mercado Livre';
 
             $dateCreated = $order['date_created'] ?? date('Y-m-d H:i:s');
-            $shippingMode = $order['shipping']['shipping_mode'] ?? 'normal';
-            $envioTipo = (str_contains($shippingMode, 'self_service') || str_contains($shippingMode, 'turbo')) ? 'flex' : 'coleta';
+            $items = $order['order_items'] ?? [];
 
             foreach ($items as $itemObj) {
                 $mlItemId = preg_replace('/[^0-9]/', '', str_replace('MLB', '', $itemObj['item']['id'] ?? ''));
@@ -205,12 +235,15 @@ class MercadoLivreClient {
             }
         }
 
-        $this->logSecurityEvent('ORDERS_SYNCED_SUCCESS', "Sincronizados " . count($results) . " pedidos e {$savedCount} itens com sucesso.");
+        $this->logSecurityEvent('ORDERS_SYNCED_SUCCESS', "Sincronização em tempo real: " . count($results) . " pedidos oficiais analisados e {$savedCount} itens processados.");
 
         return [
             'success' => true,
             'orders_found' => count($results),
-            'items_imported' => $savedCount
+            'items_imported' => $savedCount,
+            'message' => count($results) > 0 
+                ? "Sincronização concluída! {$savedCount} itens reais atualizados na lista de expedição." 
+                : "API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento."
         ];
     }
 

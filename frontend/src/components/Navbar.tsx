@@ -21,10 +21,8 @@ interface NavbarProps {
   onOpenAudit: () => void;
   mlConfig: MLConfig | null;
   onSyncML: () => void;
-  onSimulateML: () => void;
   onResetOrders: () => void;
   syncing: boolean;
-  simulating: boolean;
   flexCutoff: string;
 }
 
@@ -35,10 +33,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAudit,
   mlConfig,
   onSyncML,
-  onSimulateML,
   onResetOrders,
   syncing,
-  simulating,
   flexCutoff,
 }) => {
   return (
@@ -147,26 +143,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               <span className="hidden sm:inline">Auditoria</span>
             </button>
 
-            {/* Sync ML Button */}
+            {/* Sincronização em Tempo Real com Dados Reais da API do ML */}
             <button
               onClick={onSyncML}
               disabled={syncing}
-              title="Buscar vendas recentes na API do Mercado Livre"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition-all active:scale-95 disabled:opacity-50"
+              title="Buscar pedidos reais e pendentes diretamente na API oficial do Mercado Livre"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 text-white text-xs font-bold shadow-md shadow-sky-500/20 transition-all active:scale-95 disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-sky-400' : ''}`} />
-              <span className="hidden sm:inline">{syncing ? 'Sincronizando...' : 'Sincronizar ML'}</span>
-            </button>
-
-            {/* Test Simulation Button */}
-            <button
-              onClick={onSimulateML}
-              disabled={simulating}
-              title="Simular vendas de hoje com base nos 767 anúncios reais do banco"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-sky-500 hover:from-sky-500 hover:to-sky-400 text-white text-xs font-bold shadow-md shadow-sky-500/20 transition-all active:scale-95 disabled:opacity-50"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
-              <span className="hidden sm:inline">Simular Vendas</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${syncing ? 'animate-spin text-white' : ''}`} />
+              <span>{syncing ? 'Sincronizando...' : 'Sincronizar ML (Tempo Real)'}</span>
             </button>
 
             {/* Clear Orders */}

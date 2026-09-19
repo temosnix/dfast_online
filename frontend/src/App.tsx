@@ -30,7 +30,6 @@ export default function App() {
 
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [simulating, setSimulating] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuditOpen, setIsAuditOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -162,22 +161,6 @@ export default function App() {
     }
   };
 
-  const handleSimulateML = async () => {
-    setSimulating(true);
-    try {
-      const res = await fetch('/api/mercadolivre/simulate', { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        showNotification(data.message || 'Pedidos simulados com sucesso!');
-        loadData();
-      }
-    } catch (err) {
-      showNotification('Erro ao simular pedidos', 'error');
-    } finally {
-      setSimulating(false);
-    }
-  };
-
   const handleResetOrders = async () => {
     if (!confirm('Deseja realmente limpar todos os pedidos da lista do dia?')) return;
     try {
@@ -212,10 +195,8 @@ export default function App() {
         onOpenAudit={() => setIsAuditOpen(true)}
         mlConfig={mlConfig}
         onSyncML={handleSyncML}
-        onSimulateML={handleSimulateML}
         onResetOrders={handleResetOrders}
         syncing={syncing}
-        simulating={simulating}
         flexCutoff={mlConfig?.flex_cutoff || '14:00'}
       />
 

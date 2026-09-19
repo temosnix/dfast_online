@@ -676,11 +676,11 @@ const server = http.createServer(async (req, res) => {
       rows.forEach(r => { configs[r.chave] = r.valor; });
       const appId = decryptField(configs['ml_app_id']) || process.env.ML_APP_ID || '';
       let accessToken = decryptField(configs['ml_access_token']) || process.env.ML_ACCESS_TOKEN || '';
-      const sellerId = decryptField(configs['ml_seller_id']) || process.env.ML_SELLER_ID || '';
+      const sellerId = decryptField(configs['ml_seller_id']) || process.env.ML_SELLER_ID || '34977269';
       const expiresAt = parseInt(configs['ml_token_expires_at'] || '0', 10);
 
       if (!accessToken) {
-        return sendJson(res, 400, { error: 'Não autenticado no Mercado Livre ou token ausente. Configure suas credenciais.' });
+        return sendJson(res, 400, { error: 'Não autenticado no Mercado Livre ou token ausente. Configure suas credenciais em Configurações.' });
       }
 
       // Se expirar em menos de 10 minutos (600s), renova preventivamente
@@ -714,14 +714,8 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      if (!sellerId) {
-        return sendJson(res, 400, { error: 'Seller ID não configurado no sistema.' });
-      }
-
-      const todayFrom = new Date();
-      todayFrom.setHours(0, 0, 0, 0);
-      const fromStr = todayFrom.toISOString();
-      const searchUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.date_created.from=${encodeURIComponent(fromStr)}&order.status=paid`;
+      // Busca pedidos reais pagos que ainda não foram entregues (regras do repositório BD-APP)
+      const searchUrl = `https://api.mercadolibre.com/orders/search?seller=${sellerId}&order.status=paid&tags.not=delivered,no_shipping&sort=date_desc&limit=50`;
 
       // Chamada com retry e exponential backoff para HTTP 429
       let retries = 0;
@@ -737,6 +731,38 @@ const server = http.createServer(async (req, res) => {
           }
         });
 
+        // Se retornar 401, tenta auto-renovação e repete
+        if (orderRes.status === 401) {
+          const secret = decryptField(configs['ml_secret_key']) || process.env.ML_SECRET_KEY || '';
+          const refreshToken = decryptField(configs['ml_refresh_token']) || process.env.ML_REFRESH_TOKEN || '';
+          if (refreshToken && retries === 0) {
+            retries++;
+            logSecurityEvent('TOKEN_AUTO_REFRESH_ON_401', 'HTTP 401 interceptado. Renovando token via refresh_token.', req.socket.remoteAddress);
+            const rRes = await fetch('https://api.mercadolibre.com/oauth/token', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+              },
+              body: new URLSearchParams({
+                grant_type: 'refresh_token',
+                client_id: appId,
+                client_secret: secret,
+                refresh_token: refreshToken
+              })
+            });
+            const rData = await rRes.json();
+            if (rData.access_token) {
+              accessToken = rData.access_token;
+              const stmt = db.prepare("INSERT OR REPLACE INTO ml_config (chave, valor, atualizado_em) VALUES (?, ?, CURRENT_TIMESTAMP)");
+              stmt.run('ml_access_token', encryptField(rData.access_token));
+              if (rData.refresh_token) stmt.run('ml_refresh_token', encryptField(rData.refresh_token));
+              stmt.run('ml_token_expires_at', String(Math.floor(Date.now() / 1000) + (rData.expires_in || 21600)));
+              continue;
+            }
+          }
+        }
+
         if (orderRes.status === 429) {
           retries++;
           if (retries > 3) {
@@ -751,7 +777,7 @@ const server = http.createServer(async (req, res) => {
 
         orderData = await orderRes.json();
         if (!orderRes.ok) {
-          return sendJson(res, orderRes.status, orderData);
+          return sendJson(res, orderRes.status, { error: orderData.message || 'Erro na API do Mercado Livre ao sincronizar pedidos reais.' });
         }
         break;
       }
@@ -767,13 +793,37 @@ const server = http.createServer(async (req, res) => {
 
       for (const order of results) {
         const orderId = String(order.id).replace(/[^0-9]/g, '');
+        const shipping = order.shipping || {};
+        const shippingId = String(shipping.id || '');
+        let envioTipo = (shipping.shipping_mode && (shipping.shipping_mode.includes('self_service') || shipping.shipping_mode.includes('turbo'))) ? 'flex' : 'coleta';
+
+        // Verificação de modalidade real de logística
+        if (shippingId) {
+          try {
+            const shipRes = await fetch(`https://api.mercadolibre.com/shipments/${shippingId}`, {
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'User-Agent': `DfastOnline-WMS/1.0 (AppId: ${appId || 'Pending'}; Local-Dev)`
+              }
+            });
+            if (shipRes.ok) {
+              const shipData = await shipRes.json();
+              if (shipData.logistic_type === 'self_service' || (shipData.logistic_type && shipData.logistic_type.includes('turbo'))) {
+                envioTipo = 'flex';
+              } else {
+                envioTipo = 'coleta';
+              }
+            }
+          } catch (e) {
+            // mantém fallback seguro
+          }
+        }
+
         const items = order.order_items || [];
         const firstName = (order.buyer && order.buyer.first_name) ? String(order.buyer.first_name).replace(/[^\p{L}\s]/gu, '') : '';
         const lastName = (order.buyer && order.buyer.last_name) ? String(order.buyer.last_name).replace(/[^\p{L}\s]/gu, '') : '';
         const buyerClean = `${firstName} ${lastName}`.trim() || 'Cliente Mercado Livre';
         const dateCreated = order.date_created || new Date().toISOString();
-        const shippingMode = (order.shipping && order.shipping.shipping_mode) ? order.shipping.shipping_mode : 'normal';
-        const envioTipo = (shippingMode.includes('self_service') || shippingMode.includes('turbo')) ? 'flex' : 'coleta';
 
         for (const itemObj of items) {
           const mlItemId = String((itemObj.item && itemObj.item.id) || '').replace(/[^0-9]/g, '');
@@ -794,12 +844,15 @@ const server = http.createServer(async (req, res) => {
         }
       }
 
-      logSecurityEvent('ORDERS_SYNCED_SUCCESS', `Sincronizados ${results.length} pedidos e ${savedCount} itens com sucesso.`, req.socket.remoteAddress);
+      logSecurityEvent('ORDERS_SYNCED_SUCCESS', `Sincronização em tempo real: ${results.length} pedidos oficiais analisados e ${savedCount} itens processados.`, req.socket.remoteAddress);
 
       return sendJson(res, 200, {
         success: true,
         orders_found: results.length,
-        items_imported: savedCount
+        items_imported: savedCount,
+        message: results.length > 0
+          ? `Sincronização concluída! ${savedCount} itens reais atualizados na lista de expedição.`
+          : 'API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento.'
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
@@ -811,65 +864,6 @@ const server = http.createServer(async (req, res) => {
     try {
       const logs = db.prepare("SELECT * FROM ml_audit_log ORDER BY id DESC LIMIT 50").all();
       return sendJson(res, 200, { success: true, total: logs.length, logs });
-    } catch (err) {
-      return sendJson(res, 500, { error: err.message });
-    }
-  }
-
-  // 8. /api/mercadolivre/simulate (Gera vendas com base nos 767 anúncios reais do Danilo)
-  if (pathname === '/api/mercadolivre/simulate' && req.method === 'POST') {
-    try {
-      const anuncios = db.prepare(`
-        SELECT DISTINCT a.id_ml, a.kit, a.caixa
-        FROM anuncios a
-        JOIN kits_anuncio k ON a.id_ml = k.id_ml_anuncio
-        ORDER BY RANDOM()
-        LIMIT 8
-      `).all();
-
-      const nomes = [
-        'Carlos Alberto Silva', 'Mariana Oliveira Souza', 'Roberto Ferreira Santos',
-        'Juliana Costa Lima', 'Fernando Mendes Rocha', 'Patrícia Martins Ramos',
-        'Lucas Henrique Dias', 'Amanda Ribeiro Duarte'
-      ];
-
-      const stmtInsert = db.prepare(`
-        INSERT OR REPLACE INTO pedidos_vendas 
-        (order_id, ml_item_id, titulo, quantidade, comprador, envio_tipo, envio_status, status_picking)
-        VALUES (?, ?, ?, ?, ?, ?, 'ready_to_ship', 'pendente')
-      `);
-
-      const stmtDesc = db.prepare(`
-        SELECT d.descricao FROM kits_anuncio k 
-        JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
-        WHERE k.id_ml_anuncio = ? LIMIT 1
-      `);
-
-      let gerados = 0;
-      anuncios.forEach((anuncio, idx) => {
-        const descRow = stmtDesc.get(anuncio.id_ml);
-
-        const descComponente = descRow ? descRow.descricao : 'Kit de Suspensão Automotiva';
-        const orderId = '20000' + Math.floor(1000000 + Math.random() * 9000000);
-        const tipoEnvio = idx % 2 === 0 ? 'flex' : 'coleta';
-        const qtd = idx === 2 ? 2 : 1;
-
-        stmtInsert.run(
-          orderId,
-          anuncio.id_ml,
-          `MLB${anuncio.id_ml} - ${descComponente}`,
-          qtd,
-          nomes[idx % nomes.length],
-          tipoEnvio
-        );
-        gerados++;
-      });
-
-      return sendJson(res, 200, {
-        success: true,
-        message: `${gerados} pedidos reais do Mercado Livre simulados com sucesso para expedição hoje!`,
-        total_gerados: gerados,
-      });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
     }

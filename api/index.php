@@ -517,65 +517,6 @@ try {
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/mercadolivre/simulate (Simulador com 767 Anúncios Reais)
-    // -------------------------------------------------------------
-    if ($route === 'mercadolivre/simulate' && $method === 'POST') {
-        // Selecionar 8 anúncios aleatórios do banco existente do Danilo que possuem kits
-        $anuncios = $pdo->query("
-            SELECT DISTINCT a.id_ml, a.kit, a.caixa
-            FROM anuncios a
-            JOIN kits_anuncio k ON a.id_ml = k.id_ml_anuncio
-            ORDER BY RANDOM()
-            LIMIT 8
-        ")->fetchAll();
-
-        $nomesFicticios = [
-            'Carlos Alberto Silva', 'Mariana Oliveira Souza', 'Roberto Ferreira Santos', 
-            'Juliana Costa Lima', 'Fernando Mendes Rocha', 'Patrícia Martins Ramos',
-            'Lucas Henrique Dias', 'Amanda Ribeiro Duarte'
-        ];
-
-        $stmtInsert = $pdo->prepare("
-            INSERT OR REPLACE INTO pedidos_vendas 
-            (order_id, ml_item_id, titulo, quantidade, comprador, envio_tipo, envio_status, status_picking)
-            VALUES (:order_id, :ml_item_id, :titulo, :quantidade, :comprador, :envio_tipo, 'ready_to_ship', 'pendente')
-        ");
-
-        $stmtDesc = $pdo->prepare("
-            SELECT d.descricao FROM kits_anuncio k 
-            JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi 
-            WHERE k.id_ml_anuncio = ? LIMIT 1
-        ");
-
-        $gerados = 0;
-        foreach ($anuncios as $idx => $anuncio) {
-            $stmtDesc->execute([$anuncio['id_ml']]);
-            $descComponente = $stmtDesc->fetchColumn() ?: 'Kit de Suspensão Automotiva';
-
-            $orderId = '20000' . rand(1000000, 9999999);
-            $tipoEnvio = ($idx % 2 === 0) ? 'flex' : 'coleta'; // Metade Flex (mesmo dia), metade Coleta
-            $qtd = ($idx === 2) ? 2 : 1;
-
-            $stmtInsert->execute([
-                'order_id' => $orderId,
-                'ml_item_id' => $anuncio['id_ml'],
-                'titulo' => "MLB{$anuncio['id_ml']} - " . $descComponente,
-                'quantidade' => $qtd,
-                'comprador' => $nomesFicticios[$idx % count($nomesFicticios)],
-                'envio_tipo' => $tipoEnvio
-            ]);
-            $gerados++;
-        }
-
-        echo json_encode([
-            'success' => true,
-            'message' => "{$gerados} pedidos reais do Mercado Livre simulados com sucesso para expedição hoje!",
-            'total_gerados' => $gerados
-        ]);
-        exit;
-    }
-
-    // -------------------------------------------------------------
     // ROTA: /api/orders/reset (Limpar Pedidos)
     // -------------------------------------------------------------
     if ($route === 'orders/reset' && $method === 'POST') {
