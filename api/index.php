@@ -73,6 +73,14 @@ try {
             WHERE s.saldo_atual <= s.estoque_minimo
         ")->fetchColumn();
 
+        // Anúncios vendidos sem cadastro no banco
+        $anunciosSemCadastro = $pdo->query("
+            SELECT COUNT(DISTINCT p.ml_item_id) 
+            FROM pedidos_vendas p
+            LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE a.id_ml IS NULL
+        ")->fetchColumn();
+
         echo json_encode([
             'success' => true,
             'stats' => [
@@ -83,6 +91,7 @@ try {
                 'pedidos_separados' => (int)$pedidosSeparados,
                 'pedidos_flex_hoje' => (int)$pedidosFlex,
                 'itens_estoque_baixo' => (int)$estoqueBaixo,
+                'anuncios_sem_cadastro' => (int)$anunciosSemCadastro,
             ]
         ]);
         exit;
@@ -94,7 +103,7 @@ try {
     if ($route === 'picking' && $method === 'GET') {
         // 1. Visão por Pedido
         $pedidos = $pdo->query("
-            SELECT p.*, a.kit, a.caixa
+            SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
             FROM pedidos_vendas p
             LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
             ORDER BY 
@@ -342,6 +351,93 @@ try {
             'data_geracao' => date('d/m/Y H:i'),
             'total_itens' => count($purchases),
             'itens' => $purchases
+        ]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/anuncios/unregistered (Anúncios do ML Vendidos sem Cadastro no Banco)
+    // -------------------------------------------------------------
+    if ($route === 'anuncios/unregistered' && $method === 'GET') {
+        $sql = "
+            SELECT 
+                p.ml_item_id as id_ml,
+                p.titulo,
+                COUNT(p.id) as total_pedidos,
+                SUM(p.quantidade) as total_unidades,
+                MAX(p.data_venda) as ultima_venda
+            FROM pedidos_vendas p
+            LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+            WHERE a.id_ml IS NULL
+            GROUP BY p.ml_item_id, p.titulo
+            ORDER BY total_pedidos DESC
+        ";
+        $unregistered = $pdo->query($sql)->fetchAll();
+        echo json_encode(['success' => true, 'count' => count($unregistered), 'unregistered' => $unregistered]);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/anuncios/cadastrar (Cadastrar Caixa e Componentes Nissi do Anúncio)
+    // -------------------------------------------------------------
+    if ($route === 'anuncios/cadastrar' && $method === 'POST') {
+        $idMl = isset($input['id_ml']) ? preg_replace('/[^0-9]/', '', trim($input['id_ml'])) : '';
+        $caixa = isset($input['caixa']) ? preg_replace('/[^a-zA-Z0-9_\-\s]/', '', trim($input['caixa'])) : '1';
+        $kit = (isset($input['kit']) && $input['kit'] === 'N') ? 'N' : 'S';
+        $componentes = $input['componentes'] ?? [];
+
+        if (empty($idMl)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'id_ml é obrigatório']);
+            exit;
+        }
+
+        $pdo->beginTransaction();
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO anuncios (id_ml, kit, caixa)
+                VALUES (:id_ml, :kit, :caixa)
+                ON CONFLICT(id_ml) DO UPDATE SET
+                    kit = excluded.kit,
+                    caixa = excluded.caixa
+            ");
+            $stmt->execute([
+                'id_ml' => $idMl,
+                'kit' => $kit,
+                'caixa' => $caixa ?: '1'
+            ]);
+
+            // Atualiza kits_anuncio
+            $pdo->prepare("DELETE FROM kits_anuncio WHERE id_ml_anuncio = ?")->execute([$idMl]);
+
+            if (is_array($componentes) && count($componentes) > 0) {
+                $stmtComp = $pdo->prepare("INSERT INTO kits_anuncio (id_ml_anuncio, id_kit_nissi, qtd_kit) VALUES (?, ?, ?)");
+                foreach ($componentes as $c) {
+                    if (!empty($c['id_kit_nissi'])) {
+                        $stmtComp->execute([
+                            $idMl,
+                            trim($c['id_kit_nissi']),
+                            max(1, (int)($c['qtd_kit'] ?? 1))
+                        ]);
+                    }
+                }
+            }
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        $logStmt = $pdo->prepare("INSERT INTO ml_audit_log (evento, detalhes, ip_origem) VALUES (?, ?, ?)");
+        $logStmt->execute([
+            'ANUNCIO_CADASTRADO',
+            "Anúncio MLB-{$idMl} cadastrado: Caixa {$caixa}, Kit {$kit}, " . count($componentes) . " componentes.",
+            $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1'
+        ]);
+
+        echo json_encode([
+            'success' => true,
+            'message' => "Anúncio MLB-{$idMl} cadastrado com sucesso no banco de dados SQLite!"
         ]);
         exit;
     }

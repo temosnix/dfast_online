@@ -226,6 +226,12 @@ const server = http.createServer(async (req, res) => {
       const pedidosSeparados = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas WHERE status_picking = 'separado'").get().c;
       const pedidosFlex = db.prepare("SELECT COUNT(*) as c FROM pedidos_vendas WHERE envio_tipo = 'flex' AND status_picking = 'pendente'").get().c;
       const estoqueBaixo = db.prepare("SELECT COUNT(*) as c FROM estoque_saldos s WHERE s.saldo_atual <= s.estoque_minimo").get().c;
+      const anunciosSemCadastro = db.prepare(`
+        SELECT COUNT(DISTINCT p.ml_item_id) as c
+        FROM pedidos_vendas p
+        LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE a.id_ml IS NULL
+      `).get().c;
 
       return sendJson(res, 200, {
         success: true,
@@ -237,6 +243,7 @@ const server = http.createServer(async (req, res) => {
           pedidos_separados: pedidosSeparados,
           pedidos_flex_hoje: pedidosFlex,
           itens_estoque_baixo: estoqueBaixo,
+          anuncios_sem_cadastro: anunciosSemCadastro,
         }
       });
     } catch (err) {
@@ -248,7 +255,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/picking' && req.method === 'GET') {
     try {
       const pedidos = db.prepare(`
-        SELECT p.*, a.kit, a.caixa
+        SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
         FROM pedidos_vendas p
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
         ORDER BY 
@@ -467,6 +474,79 @@ const server = http.createServer(async (req, res) => {
         data_geracao: new Date().toLocaleString('pt-BR'),
         total_itens: purchases.length,
         itens: purchases,
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 6.1 /api/anuncios/unregistered (Anúncios do ML Vendidos sem Cadastro no Banco)
+  if (pathname === '/api/anuncios/unregistered' && req.method === 'GET') {
+    try {
+      const sql = `
+        SELECT 
+          p.ml_item_id as id_ml,
+          p.titulo,
+          COUNT(p.id) as total_pedidos,
+          SUM(p.quantidade) as total_unidades,
+          MAX(p.data_venda) as ultima_venda
+        FROM pedidos_vendas p
+        LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
+        WHERE a.id_ml IS NULL
+        GROUP BY p.ml_item_id, p.titulo
+        ORDER BY total_pedidos DESC
+      `;
+      const unregistered = db.prepare(sql).all();
+      return sendJson(res, 200, { success: true, count: unregistered.length, unregistered });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 6.2 /api/anuncios/cadastrar (Cadastrar Caixa e Componentes Nissi do Anúncio)
+  if (pathname === '/api/anuncios/cadastrar' && req.method === 'POST') {
+    try {
+      const { id_ml, caixa, kit, componentes } = body;
+      if (!id_ml) {
+        return sendJson(res, 400, { error: 'id_ml é obrigatório' });
+      }
+      const cleanIdMl = String(id_ml).replace(/[^0-9]/g, '');
+      const cleanCaixa = String(caixa || '1').replace(/[^a-zA-Z0-9_\-\s]/g, '').trim();
+      const cleanKit = kit === 'N' ? 'N' : 'S';
+
+      db.exec('BEGIN TRANSACTION');
+      try {
+        db.prepare(`
+          INSERT INTO anuncios (id_ml, kit, caixa)
+          VALUES (?, ?, ?)
+          ON CONFLICT(id_ml) DO UPDATE SET
+            kit = excluded.kit,
+            caixa = excluded.caixa
+        `).run(cleanIdMl, cleanKit, cleanCaixa);
+
+        db.prepare("DELETE FROM kits_anuncio WHERE id_ml_anuncio = ?").run(cleanIdMl);
+
+        if (Array.isArray(componentes) && componentes.length > 0) {
+          const stmtComp = db.prepare("INSERT INTO kits_anuncio (id_ml_anuncio, id_kit_nissi, qtd_kit) VALUES (?, ?, ?)");
+          for (const c of componentes) {
+            if (c.id_kit_nissi) {
+              const cleanIdNissi = String(c.id_kit_nissi).trim();
+              const qtd = Math.max(1, parseInt(c.qtd_kit || 1, 10));
+              stmtComp.run(cleanIdMl, cleanIdNissi, qtd);
+            }
+          }
+        }
+        db.exec('COMMIT');
+      } catch (e) {
+        db.exec('ROLLBACK');
+        throw e;
+      }
+
+      logSecurityEvent('ANUNCIO_CADASTRADO', `Anúncio MLB-${cleanIdMl} cadastrado: Caixa ${cleanCaixa}, Kit ${cleanKit}, ${componentes ? componentes.length : 0} componentes.`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        message: `Anúncio MLB-${cleanIdMl} cadastrado com sucesso no banco de dados SQLite!`
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
@@ -800,6 +880,7 @@ const server = http.createServer(async (req, res) => {
 
       const results = (orderData && orderData.results) ? orderData.results : [];
       let savedCount = 0;
+      const unregisteredMap = {};
 
       const stmtInsert = db.prepare(`
         INSERT OR REPLACE INTO pedidos_vendas 
@@ -857,17 +938,37 @@ const server = http.createServer(async (req, res) => {
             envioTipo
           );
           savedCount++;
+
+          // Identificar se o anúncio do Mercado Livre não está cadastrado no banco
+          const isRegistered = db.prepare("SELECT 1 FROM anuncios WHERE id_ml = ?").get(mlItemId);
+          if (!isRegistered && !unregisteredMap[mlItemId]) {
+            unregisteredMap[mlItemId] = {
+              id_ml: mlItemId,
+              titulo: titleClean,
+              quantidade: quantity,
+            };
+          }
         }
       }
 
-      logSecurityEvent('ORDERS_SYNCED_SUCCESS', `Sincronização em tempo real: ${results.length} pedidos oficiais analisados e ${savedCount} itens processados.`, req.socket.remoteAddress);
+      const unregisteredList = Object.values(unregisteredMap);
+
+      logSecurityEvent(
+        'ORDERS_SYNCED_SUCCESS',
+        `Sincronização em tempo real: ${results.length} pedidos oficiais analisados, ${savedCount} itens processados e ${unregisteredList.length} anúncios sem cadastro identificados.`,
+        req.socket.remoteAddress
+      );
 
       return sendJson(res, 200, {
         success: true,
         orders_found: results.length,
         items_imported: savedCount,
+        unregistered_count: unregisteredList.length,
+        unregistered_items: unregisteredList,
         message: results.length > 0
-          ? `Sincronização concluída! ${savedCount} itens reais atualizados na lista de expedição.`
+          ? (unregisteredList.length > 0
+              ? `Sincronização concluída! ${savedCount} itens importados. ⚠️ Atenção: ${unregisteredList.length} anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!`
+              : `Sincronização concluída! ${savedCount} itens reais atualizados na lista de expedição.`)
           : 'API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento.'
       });
     } catch (err) {

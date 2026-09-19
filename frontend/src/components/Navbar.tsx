@@ -10,7 +10,8 @@ import {
   Clock, 
   CheckCircle2, 
   AlertCircle,
-  ShieldCheck
+  ShieldCheck,
+  AlertTriangle
 } from 'lucide-react';
 import { MLConfig } from '../types';
 
@@ -24,6 +25,8 @@ interface NavbarProps {
   onResetOrders: () => void;
   syncing: boolean;
   flexCutoff: string;
+  unregisteredCount?: number;
+  onOpenRegisterModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -36,6 +39,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onResetOrders,
   syncing,
   flexCutoff,
+  unregisteredCount = 0,
+  onOpenRegisterModal,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 no-print">
@@ -140,6 +145,18 @@ export const Navbar: React.FC<NavbarProps> = ({
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden sm:inline">Auditoria</span>
             </button>
+
+            {/* Unregistered Ads Alert Badge */}
+            {unregisteredCount > 0 && onOpenRegisterModal && (
+              <button
+                onClick={onOpenRegisterModal}
+                title={`Atenção: Existem ${unregisteredCount} anúncios vendidos sem cadastro no banco! Clique para cadastrar agora.`}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold transition-all animate-pulse active:scale-95 shadow-lg shadow-amber-500/10"
+              >
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                <span>{unregisteredCount} Sem Cadastro</span>
+              </button>
+            )}
 
             {/* Sincronização em Tempo Real com Dados Reais da API do ML */}
             <button

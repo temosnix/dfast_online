@@ -12,9 +12,11 @@ import {
   Clock, 
   Check, 
   ExternalLink,
-  ChevronRight
+  ChevronRight,
+  AlertTriangle,
+  PlusCircle
 } from 'lucide-react';
-import { Pedido, RotaConsolidada, CaixaNecessaria } from '../types';
+import { Pedido, RotaConsolidada, CaixaNecessaria, UnregisteredAd } from '../types';
 
 interface PickingViewProps {
   pedidos: Pedido[];
@@ -22,6 +24,8 @@ interface PickingViewProps {
   caixasNecessarias: CaixaNecessaria[];
   onToggleStatus: (orderId: string) => void;
   loading: boolean;
+  unregisteredAds?: UnregisteredAd[];
+  onOpenRegisterModal?: (ad?: UnregisteredAd) => void;
 }
 
 export const PickingView: React.FC<PickingViewProps> = ({
@@ -30,6 +34,8 @@ export const PickingView: React.FC<PickingViewProps> = ({
   caixasNecessarias,
   onToggleStatus,
   loading,
+  unregisteredAds = [],
+  onOpenRegisterModal,
 }) => {
   const [viewMode, setViewMode] = useState<'rota' | 'pedidos'>('rota');
   const [filterType, setFilterType] = useState<'all' | 'flex' | 'coleta'>('all');
@@ -52,6 +58,37 @@ export const PickingView: React.FC<PickingViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {/* Alerta de Anúncios sem Cadastro */}
+      {unregisteredAds && unregisteredAds.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-amber-500/10 to-transparent border-2 border-amber-500/40 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row items-start md:items-center justify-between gap-4 no-print">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-500/30">
+              <AlertTriangle className="w-6 h-6 animate-bounce" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500 text-slate-950">
+                  Ação Necessária
+                </span>
+                <h4 className="text-sm font-bold text-amber-300">
+                  {unregisteredAds.length} Anúncio{unregisteredAds.length > 1 ? 's' : ''} do Mercado Livre sem cadastro no sistema!
+                </h4>
+              </div>
+              <p className="text-xs text-slate-300 mt-1">
+                Foram vendidas peças de anúncios que ainda não têm caixa e componentes Nissi vinculados. Cadastre-os para abastecer a rota de coleta e caixas do galpão.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => onOpenRegisterModal?.()}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all shrink-0 active:scale-95"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>Resolver Agora ({unregisteredAds.length})</span>
+          </button>
+        </div>
+      )}
+
       {/* Top Banner & KPI Metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 no-print">
         {/* Total a Enviar */}
@@ -352,10 +389,26 @@ export const PickingView: React.FC<PickingViewProps> = ({
                             </span>
                           )}
 
-                          {/* Box Badge */}
-                          <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-300 border border-purple-500/20 text-[11px] font-bold">
-                            Caixa {pedido.caixa || 'Padrão'}
-                          </span>
+                          {/* Box Badge / Unregistered Indicator */}
+                          {pedido.cadastrado === false ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenRegisterModal?.({
+                                id_ml: pedido.ml_item_id,
+                                titulo: pedido.titulo,
+                                total_pedidos: 1
+                              })}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold transition-all cursor-pointer shadow-sm active:scale-95"
+                              title="Clique para cadastrar este anúncio e vincular peças"
+                            >
+                              <AlertTriangle className="w-3 h-3 text-amber-400" />
+                              <span>⚠️ Sem Cadastro • Cadastrar</span>
+                            </button>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md bg-purple-500/10 text-purple-300 border border-purple-500/20 text-[11px] font-bold">
+                              Caixa {pedido.caixa || 'Padrão'}
+                            </span>
+                          )}
 
                           <span className="text-xs text-slate-400 font-medium">
                             • Comprador: <strong className="text-slate-200">{pedido.comprador}</strong>
@@ -390,31 +443,67 @@ export const PickingView: React.FC<PickingViewProps> = ({
 
                   {/* Components / Kits to Pick */}
                   <div className="bg-slate-950/70 rounded-xl p-3.5 border border-slate-800/80">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">
-                      Componentes que compõem este anúncio ({pedido.componentes?.length || 0} itens):
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                      {pedido.componentes?.map((comp, i) => (
-                        <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
-                              {comp.local || 'S/L'}
-                            </span>
-                            <div>
-                              <p className="text-xs font-semibold text-white truncate max-w-[170px]" title={comp.descricao}>
-                                {comp.descricao}
-                              </p>
-                              <p className="text-[10px] text-slate-400 font-mono">
-                                Nissi: {comp.id_kit_nissi}
-                              </p>
-                            </div>
-                          </div>
-                          <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">
-                            {comp.qtd_necessaria} {comp.unidade_medida}
-                          </span>
-                        </div>
-                      ))}
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                        Componentes que compõem este anúncio ({pedido.componentes?.length || 0} itens):
+                      </p>
+                      {pedido.cadastrado === false && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenRegisterModal?.({
+                            id_ml: pedido.ml_item_id,
+                            titulo: pedido.titulo,
+                            total_pedidos: 1
+                          })}
+                          className="text-[11px] font-bold text-amber-400 hover:text-amber-300 underline flex items-center gap-1"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5" />
+                          Configurar Peças e Caixa
+                        </button>
+                      )}
                     </div>
+                    {(!pedido.componentes || pedido.componentes.length === 0) ? (
+                      <div className="p-4 rounded-xl bg-amber-500/5 border border-dashed border-amber-500/30 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-amber-300/90">
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>Este anúncio não possui componentes Nissi mapeados. O operador não sabe quais peças separar no galpão.</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onOpenRegisterModal?.({
+                            id_ml: pedido.ml_item_id,
+                            titulo: pedido.titulo,
+                            total_pedidos: 1
+                          })}
+                          className="px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg font-bold text-xs transition-colors shrink-0"
+                        >
+                          Cadastrar Agora
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                        {pedido.componentes?.map((comp, i) => (
+                          <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900 border border-slate-800">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-black px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30">
+                                {comp.local || 'S/L'}
+                              </span>
+                              <div>
+                                <p className="text-xs font-semibold text-white truncate max-w-[170px]" title={comp.descricao}>
+                                  {comp.descricao}
+                                </p>
+                                <p className="text-[10px] text-slate-400 font-mono">
+                                  Nissi: {comp.id_kit_nissi}
+                                </p>
+                              </div>
+                            </div>
+                            <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded">
+                              {comp.qtd_necessaria} {comp.unidade_medida}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               );

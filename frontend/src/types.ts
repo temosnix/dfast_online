@@ -6,6 +6,15 @@ export interface Stats {
   pedidos_separados: number;
   pedidos_flex_hoje: number;
   itens_estoque_baixo: number;
+  anuncios_sem_cadastro?: number;
+}
+
+export interface UnregisteredAd {
+  id_ml: string;
+  titulo: string;
+  total_pedidos?: number;
+  total_unidades?: number;
+  ultima_venda?: string;
 }
 
 export interface ComponentePedido {
@@ -31,6 +40,7 @@ export interface Pedido {
   separado_em: string | null;
   kit?: string;
   caixa?: string;
+  cadastrado?: boolean;
   componentes?: ComponentePedido[];
 }
 

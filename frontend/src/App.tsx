@@ -5,6 +5,7 @@ import { StockView } from './components/StockView';
 import { PurchaseView } from './components/PurchaseView';
 import { SettingsModal } from './components/SettingsModal';
 import { AuditModal } from './components/AuditModal';
+import { RegisterAdModal } from './components/RegisterAdModal';
 import { 
   Stats, 
   Pedido, 
@@ -12,7 +13,8 @@ import {
   CaixaNecessaria, 
   StockItem, 
   PurchaseItem, 
-  MLConfig 
+  MLConfig,
+  UnregisteredAd
 } from './types';
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
@@ -24,6 +26,7 @@ export default function App() {
   const [caixasNecessarias, setCaixasNecessarias] = useState<CaixaNecessaria[]>([]);
   const [stock, setStock] = useState<StockItem[]>([]);
   const [purchases, setPurchases] = useState<PurchaseItem[]>([]);
+  const [unregisteredAds, setUnregisteredAds] = useState<UnregisteredAd[]>([]);
   const [distribuidorNome, setDistribuidorNome] = useState('Distribuidor Nissi');
   const [dataGeracao, setDataGeracao] = useState('');
   const [mlConfig, setMlConfig] = useState<MLConfig | null>(null);
@@ -32,6 +35,8 @@ export default function App() {
   const [syncing, setSyncing] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAuditOpen, setIsAuditOpen] = useState(false);
+  const [isRegisterOpen, setIsRegisterOpen] = useState(false);
+  const [selectedAdToRegister, setSelectedAdToRegister] = useState<UnregisteredAd | undefined>(undefined);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
@@ -39,12 +44,19 @@ export default function App() {
     setTimeout(() => setNotification(null), 4000);
   };
 
+  const handleOpenRegisterModal = (ad?: UnregisteredAd) => {
+    setSelectedAdToRegister(ad);
+    setIsRegisterOpen(true);
+  };
+
   const loadData = async () => {
     try {
-      const [statsRes, pickingRes, mlConfigRes] = await Promise.all([
+      const [statsRes, pickingRes, mlConfigRes, unregRes, stockRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/picking'),
         fetch('/api/mercadolivre/config'),
+        fetch('/api/anuncios/unregistered'),
+        fetch('/api/stock'),
       ]);
 
       if (statsRes.ok) {
@@ -62,6 +74,16 @@ export default function App() {
       if (mlConfigRes.ok) {
         const d = await mlConfigRes.json();
         setMlConfig(d.config);
+      }
+
+      if (unregRes.ok) {
+        const d = await unregRes.json();
+        setUnregisteredAds(d.unregistered || d.anuncios || []);
+      }
+
+      if (stockRes.ok) {
+        const d = await stockRes.json();
+        setStock(d.stock || []);
       }
     } catch (err: any) {
       console.error('Erro ao carregar dados:', err);
@@ -148,7 +170,12 @@ export default function App() {
       const res = await fetch('/api/mercadolivre/sync', { method: 'POST' });
       const data = await res.json();
       if (res.ok && data.success) {
-        showNotification(data.message || `Sincronização concluída! ${data.items_imported} novos itens prontos para expedição.`);
+        if (data.unregistered_count > 0) {
+          showNotification(`Atenção: ${data.unregistered_count} anúncio(s) novo(s) importado(s) ainda não possuem cadastro no banco!`, 'error');
+          setIsRegisterOpen(true);
+        } else {
+          showNotification(data.message || `Sincronização concluída! ${data.items_imported} novos itens prontos para expedição.`);
+        }
         loadData();
       } else {
         showNotification(data.error || 'Erro ao sincronizar com o Mercado Livre.', 'error');
@@ -197,6 +224,8 @@ export default function App() {
         onResetOrders={handleResetOrders}
         syncing={syncing}
         flexCutoff={mlConfig?.flex_cutoff || '14:00'}
+        unregisteredCount={unregisteredAds.length}
+        onOpenRegisterModal={() => handleOpenRegisterModal()}
       />
 
       {/* Floating Notification */}
@@ -231,6 +260,8 @@ export default function App() {
                 caixasNecessarias={caixasNecessarias}
                 onToggleStatus={handleToggleStatus}
                 loading={loading}
+                unregisteredAds={unregisteredAds}
+                onOpenRegisterModal={handleOpenRegisterModal}
               />
             )}
 
@@ -267,6 +298,22 @@ export default function App() {
       <AuditModal
         isOpen={isAuditOpen}
         onClose={() => setIsAuditOpen(false)}
+      />
+
+      {/* Register Ad & Parts Mapping Modal */}
+      <RegisterAdModal
+        isOpen={isRegisterOpen}
+        onClose={() => {
+          setIsRegisterOpen(false);
+          setSelectedAdToRegister(undefined);
+        }}
+        unregisteredAds={unregisteredAds}
+        initialAd={selectedAdToRegister}
+        stockList={stock}
+        onAdRegistered={() => {
+          loadData();
+          showNotification('Anúncio cadastrado e integrado com sucesso!');
+        }}
       />
     </div>
   );

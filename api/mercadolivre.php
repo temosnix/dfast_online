@@ -242,17 +242,37 @@ class MercadoLivreClient {
                     'envio_status' => 'ready_to_ship'
                 ]);
                 $savedCount++;
+
+                // Verificar se o anúncio existe na tabela anuncios
+                $chkStmt = $this->pdo->prepare("SELECT 1 FROM anuncios WHERE id_ml = ?");
+                $chkStmt->execute([$mlItemId]);
+                if (!$chkStmt->fetch() && !isset($unregisteredMap[$mlItemId])) {
+                    $unregisteredMap[$mlItemId] = [
+                        'id_ml' => $mlItemId,
+                        'titulo' => $titleClean,
+                        'quantidade' => $quantity,
+                    ];
+                }
             }
         }
 
-        $this->logSecurityEvent('ORDERS_SYNCED_SUCCESS', "Sincronização em tempo real: " . count($results) . " pedidos oficiais analisados e {$savedCount} itens processados.");
+        $unregisteredList = array_values($unregisteredMap ?? []);
+
+        $this->logSecurityEvent(
+            'ORDERS_SYNCED_SUCCESS', 
+            "Sincronização em tempo real: " . count($results) . " pedidos oficiais analisados, {$savedCount} itens processados e " . count($unregisteredList) . " anúncios sem cadastro identificados."
+        );
 
         return [
             'success' => true,
             'orders_found' => count($results),
             'items_imported' => $savedCount,
+            'unregistered_count' => count($unregisteredList),
+            'unregistered_items' => $unregisteredList,
             'message' => count($results) > 0 
-                ? "Sincronização concluída! {$savedCount} itens reais atualizados na lista de expedição." 
+                ? (count($unregisteredList) > 0 
+                    ? "Sincronização concluída! {$savedCount} itens importados. ⚠️ Atenção: " . count($unregisteredList) . " anúncio(s) do Mercado Livre não possuem cadastro no banco de dados!"
+                    : "Sincronização concluída! {$savedCount} itens reais atualizados na lista de expedição.")
                 : "API Mercado Livre conectada com sucesso. Nenhum novo pedido pendente de expedição no momento."
         ];
     }
