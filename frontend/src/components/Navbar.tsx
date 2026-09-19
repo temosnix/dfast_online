@@ -117,9 +117,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               <>
                 {/* Active ML Token Status Pill */}
                 {mlConfig?.has_access_token ? (
-                  <div 
-                    className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-default"
-                    title="Token oficial ativo com AES-256-GCM lido do banco de dados."
+                  <button 
+                    onClick={openSettings}
+                    type="button"
+                    className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-pointer transition-all"
+                    title="Token oficial ativo com AES-256-GCM. Clique para ver detalhes ou renovar."
                   >
                     <span className="relative flex h-2 w-2">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -131,15 +133,17 @@ export const Navbar: React.FC<NavbarProps> = ({
                         Até {new Date(mlConfig.token_expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     )}
-                  </div>
+                  </button>
                 ) : (
-                  <div 
-                    className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 text-xs cursor-default"
-                    title="Nenhum token ativo no momento no banco de dados"
+                  <button 
+                    onClick={openSettings}
+                    type="button"
+                    className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium cursor-pointer transition-all"
+                    title="Nenhum token ativo no banco de dados. Clique aqui para configurar ou conectar via OAuth."
                   >
-                    <span className="w-2 h-2 rounded-full bg-slate-500"></span>
-                    <span>Token Inativo</span>
-                  </div>
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                    <span>Token Inativo (Configurar)</span>
+                  </button>
                 )}
 
                 {/* Flex Cutoff Pill */}

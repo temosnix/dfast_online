@@ -10,7 +10,7 @@ class CryptoService {
     private const PREFIX = 'enc:v1:';
 
     private static function getMasterKey(): string {
-        $key = getenv('APP_ENCRYPTION_KEY') ?: 'dfast_online_master_aes256_key_sec_2026_hostgator';
+        $key = $_ENV['APP_ENCRYPTION_KEY'] ?? $_SERVER['APP_ENCRYPTION_KEY'] ?? getenv('APP_ENCRYPTION_KEY') ?: 'dfast_online_master_aes256_key_sec_2026_hostgator';
         // Deriva uma chave de 256 bits (32 bytes) segura via SHA-256
         return hash('sha256', $key, true);
     }

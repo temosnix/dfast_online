@@ -22,15 +22,19 @@ function getDatabaseConnection(): PDO {
                 $val = trim($val);
                 if (!array_key_exists($key, $_ENV)) {
                     $_ENV[$key] = $val;
-                    putenv("$key=$val");
+                    $_SERVER[$key] = $val;
+                    @putenv("$key=$val");
                 }
             }
         }
     }
 
     // Identificar caminho do arquivo do banco SQLite
+    $customPath = $_ENV['DATABASE_PATH'] ?? $_SERVER['DATABASE_PATH'] ?? getenv('DATABASE_PATH');
     $possiblePaths = [
-        getenv('DATABASE_PATH'),
+        $customPath,
+        $customPath ? __DIR__ . '/../' . $customPath : null,
+        $customPath ? __DIR__ . '/' . $customPath : null,
         __DIR__ . '/database/db_app.db',
         __DIR__ . '/../database/db_app.db',
         __DIR__ . '/../../database/db_app.db',

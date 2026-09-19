@@ -28,8 +28,16 @@ const apiDir = path.join(baseDir, 'api');
 const targetApiDir = path.join(stagingDir, 'api');
 fs.cpSync(apiDir, targetApiDir, { recursive: true });
 
-console.log('[Deploy HostGator] 4. Copiando banco de dados SQLite oficial...');
+console.log('[Deploy HostGator] 4. Sincronizando WAL e copiando banco de dados SQLite oficial...');
 const sourceDb = 'C:/Users/User/projetos/banco de dados Dfast/db_app.db';
+const { DatabaseSync } = require('node:sqlite');
+const dbSync = new DatabaseSync(sourceDb);
+const checkpointRes = dbSync.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+console.log('   -> WAL Checkpoint executado:', checkpointRes);
+const tokenCheck = dbSync.prepare("SELECT chave, substr(valor, 1, 20) as v FROM ml_config WHERE chave IN ('ml_access_token', 'ml_refresh_token')").all();
+console.log(`   -> Tokens ativos verificados no banco: ${tokenCheck.length} chaves encontradas.`);
+dbSync.close();
+
 const targetDbDir = path.join(targetApiDir, 'database');
 fs.mkdirSync(targetDbDir, { recursive: true });
 fs.copyFileSync(sourceDb, path.join(targetDbDir, 'db_app.db'));

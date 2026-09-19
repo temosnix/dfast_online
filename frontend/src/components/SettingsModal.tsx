@@ -50,11 +50,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [refreshingToken, setRefreshingToken] = useState(false);
   const [tokenMessage, setTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('dfast_auth_token');
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+  };
+
   const handleRefreshToken = async () => {
     setRefreshingToken(true);
     setTokenMessage(null);
     try {
-      const res = await fetch('/api/mercadolivre/refresh', { method: 'POST' });
+      const res = await fetch('/api/mercadolivre/refresh', { 
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       if (res.ok && data.success) {
         setTokenMessage({ text: 'Tokens de acesso do ML renovados com sucesso!', type: 'success' });
@@ -71,7 +81,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleConnectOAuth = async () => {
     try {
-      const res = await fetch('/api/mercadolivre/auth-url');
+      const res = await fetch('/api/mercadolivre/auth-url', {
+        headers: getAuthHeaders()
+      });
       const data = await res.json();
       if (res.ok && data.auth_url) {
         window.open(data.auth_url, '_blank');
