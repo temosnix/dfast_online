@@ -183,20 +183,78 @@ try {
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/picking (Lista de Separação Inteligente)
+    // ROTA: /api/picking (Lista de Separação Inteligente com Filtro de Origem e SLA)
     // -------------------------------------------------------------
     if ($route === 'picking' && $method === 'GET') {
         $tipo = $_GET['tipo'] ?? 'nissi'; // 'nissi' (padrão: almoxarifado), 'producao', 'todos'
+        $sla = $_GET['sla'] ?? 'todos'; // 'hoje', 'proximo', 'todos' ou data específica 'YYYY-MM-DD'
 
-        $sqlWhere = '';
+        $todayStr = date('Y-m-d');
+
+        // Descobre a próxima data de SLA disponível (>= hoje)
+        $stmtNextSla = $pdo->prepare("
+            SELECT sla_expected_date 
+            FROM pedidos_vendas 
+            WHERE sla_expected_date IS NOT NULL AND sla_expected_date >= ?
+            ORDER BY sla_expected_date ASC LIMIT 1
+        ");
+        $stmtNextSla->execute([$todayStr]);
+        $nextSlaDate = $stmtNextSla->fetchColumn() ?: null;
+
+        // Lista de SLAs disponíveis no banco de dados com contagens
+        $availableSlasRaw = $pdo->query("
+            SELECT 
+                COALESCE(p.sla_expected_date, 'Sem Data') as date,
+                COUNT(*) as count,
+                SUM(CASE WHEN p.status_picking = 'pendente' THEN 1 ELSE 0 END) as pendentes
+            FROM pedidos_vendas p
+            GROUP BY COALESCE(p.sla_expected_date, 'Sem Data')
+            ORDER BY p.sla_expected_date ASC
+        ")->fetchAll();
+
+        $availableSlas = array_map(function($s) use ($todayStr, $nextSlaDate) {
+            $label = $s['date'];
+            if ($s['date'] === $todayStr) {
+                $label = "Hoje ({$s['date']})";
+            } else if ($s['date'] === $nextSlaDate) {
+                $label = "Próximo ({$s['date']})";
+            }
+            return array_merge($s, [
+                'count' => (int)$s['count'],
+                'pendentes' => (int)$s['pendentes'],
+                'label' => $label
+            ]);
+        }, $availableSlasRaw);
+
+        // Filtros dinâmicos da query de pedidos
+        $whereClauses = [];
+        $queryParams = [];
+
         if ($tipo === 'nissi') {
-            $sqlWhere = "WHERE (a.kit = 'S' OR a.id_ml IS NULL)";
+            $whereClauses[] = "(a.kit = 'S' OR a.id_ml IS NULL)";
         } else if ($tipo === 'producao') {
-            $sqlWhere = "WHERE a.kit = 'N'";
+            $whereClauses[] = "a.kit = 'N'";
         }
 
+        $activeSlaDate = null;
+        if ($sla === 'hoje') {
+            $whereClauses[] = "p.sla_expected_date = ?";
+            $queryParams[] = $todayStr;
+            $activeSlaDate = $todayStr;
+        } else if ($sla === 'proximo' && $nextSlaDate) {
+            $whereClauses[] = "p.sla_expected_date = ?";
+            $queryParams[] = $nextSlaDate;
+            $activeSlaDate = $nextSlaDate;
+        } else if (!empty($sla) && $sla !== 'todos' && $sla !== 'all') {
+            $whereClauses[] = "p.sla_expected_date = ?";
+            $queryParams[] = $sla;
+            $activeSlaDate = $sla;
+        }
+
+        $sqlWhere = !empty($whereClauses) ? 'WHERE ' . implode(' AND ', $whereClauses) : '';
+
         // 1. Visão por Pedido
-        $pedidos = $pdo->query("
+        $pedStmt = $pdo->prepare("
             SELECT p.*, a.kit, a.caixa, (a.id_ml IS NOT NULL) as cadastrado
             FROM pedidos_vendas p
             LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
@@ -205,32 +263,45 @@ try {
                 CASE WHEN p.envio_tipo = 'flex' THEN 0 ELSE 1 END,
                 p.status_picking ASC,
                 p.id ASC
-        ")->fetchAll();
+        ");
+        $pedStmt->execute($queryParams);
+        $pedidos = $pedStmt->fetchAll();
+
+        $stmtComponents = $pdo->prepare("
+            SELECT 
+                k.id_kit_nissi,
+                (k.qtd_kit * :qtd_pedido) as qtd_necessaria,
+                d.descricao,
+                d.unidade_medida,
+                COALESCE(d.local, 'S/L') as local,
+                COALESCE(s.saldo_atual, 0) as saldo_atual
+            FROM kits_anuncio k
+            JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
+            LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
+            WHERE k.id_ml_anuncio = :id_ml
+            ORDER BY d.local ASC
+        ");
 
         foreach ($pedidos as &$ped) {
-            $stmt = $pdo->prepare("
-                SELECT 
-                    k.id_kit_nissi,
-                    (k.qtd_kit * :qtd_pedido) as qtd_necessaria,
-                    d.descricao,
-                    d.unidade_medida,
-                    COALESCE(d.local, 'S/L') as local,
-                    COALESCE(s.saldo_atual, 0) as saldo_atual
-                FROM kits_anuncio k
-                JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
-                LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
-                WHERE k.id_ml_anuncio = :id_ml
-                ORDER BY d.local ASC
-            ");
-            $stmt->execute([
+            $stmtComponents->execute([
                 'qtd_pedido' => $ped['quantidade'],
                 'id_ml' => $ped['ml_item_id']
             ]);
-            $ped['componentes'] = $stmt->fetchAll();
+            $ped['componentes'] = $stmtComponents->fetchAll();
         }
 
-        // 2. Visão Consolidada por Localização no Galpão (Rota de Picking Otimizada)
-        $consolidadoStmt = $pdo->query("
+        // 2. Rota consolidada e caixas filtradas pelo SLA selecionado
+        $rotaWhereClauses = ["p.status_picking = 'pendente'"];
+        $rotaParams = [];
+
+        if ($activeSlaDate) {
+            $rotaWhereClauses[] = "p.sla_expected_date = ?";
+            $rotaParams[] = $activeSlaDate;
+        }
+
+        $rotaSqlWhere = implode(' AND ', $rotaWhereClauses);
+
+        $consolidadoStmt = $pdo->prepare("
             SELECT 
                 COALESCE(d.local, 'S/L') as local,
                 k.id_kit_nissi,
@@ -243,45 +314,63 @@ try {
             JOIN kits_anuncio k ON p.ml_item_id = k.id_ml_anuncio
             JOIN distribuidor d ON k.id_kit_nissi = d.id_nissi
             LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
-            WHERE p.status_picking = 'pendente'
+            WHERE {$rotaSqlWhere}
             GROUP BY COALESCE(d.local, 'S/L'), k.id_kit_nissi
             ORDER BY COALESCE(d.local, 'S/L') ASC, k.id_kit_nissi ASC
         ");
+        $consolidadoStmt->execute($rotaParams);
         $consolidado = $consolidadoStmt->fetchAll();
 
         // 3. Resumo de Caixas Necessárias para o Despacho
-        $caixasStmt = $pdo->query("
+        $caixasStmt = $pdo->prepare("
             SELECT 
                 COALESCE(a.caixa, 'Indefinida') as numero_caixa,
                 SUM(p.quantidade) as total_caixas
             FROM pedidos_vendas p
             LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
-            WHERE p.status_picking = 'pendente'
+            WHERE {$rotaSqlWhere}
             GROUP BY a.caixa
             ORDER BY a.caixa ASC
         ");
+        $caixasStmt->execute($rotaParams);
         $caixas = $caixasStmt->fetchAll();
 
         // 4. Contadores por Origem
-        $countNissi = $pdo->query("
+        $slaParam = $activeSlaDate ? [$activeSlaDate] : [];
+        $slaClause = $activeSlaDate ? 'AND p.sla_expected_date = ?' : '';
+
+        $stmtCountNissi = $pdo->prepare("
             SELECT COUNT(*) FROM pedidos_vendas p
             LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
-            WHERE (a.kit = 'S' OR a.id_ml IS NULL)
-        ")->fetchColumn();
+            WHERE (a.kit = 'S' OR a.id_ml IS NULL) {$slaClause}
+        ");
+        $stmtCountNissi->execute($slaParam);
+        $countNissi = $stmtCountNissi->fetchColumn();
 
-        $countProducao = $pdo->query("
+        $stmtCountProducao = $pdo->prepare("
             SELECT COUNT(*) FROM pedidos_vendas p
             JOIN anuncios a ON p.ml_item_id = a.id_ml
-            WHERE a.kit = 'N'
-        ")->fetchColumn();
+            WHERE a.kit = 'N' {$slaClause}
+        ");
+        $stmtCountProducao->execute($slaParam);
+        $countProducao = $stmtCountProducao->fetchColumn();
 
-        $countTodos = $pdo->query("SELECT COUNT(*) FROM pedidos_vendas")->fetchColumn();
+        $stmtCountTodos = $pdo->prepare("
+            SELECT COUNT(*) FROM pedidos_vendas p
+            " . ($activeSlaDate ? 'WHERE p.sla_expected_date = ?' : '') . "
+        ");
+        $stmtCountTodos->execute($slaParam);
+        $countTodos = $stmtCountTodos->fetchColumn();
 
         echo json_encode([
             'success' => true,
             'pedidos' => $pedidos,
             'rota_consolidada' => $consolidado,
             'caixas_necessarias' => $caixas,
+            'available_slas' => $availableSlas,
+            'selected_sla' => $sla,
+            'active_sla_date' => $activeSlaDate,
+            'next_sla_date' => $nextSlaDate,
             'counts' => [
                 'nissi' => (int)$countNissi,
                 'producao' => (int)$countProducao,

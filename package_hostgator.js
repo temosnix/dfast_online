@@ -19,11 +19,14 @@ if (fs.existsSync(zipFile)) {
 }
 fs.mkdirSync(stagingDir, { recursive: true });
 
-console.log('[Deploy HostGator] 2. Copiando arquivos do Frontend compilado (Vite)...');
+console.log('[Deploy HostGator] 2. Recompilando o Frontend React (Vite) idêntico ao localhost...');
+execSync('npm run build', { cwd: path.join(baseDir, 'frontend'), stdio: 'inherit' });
+
+console.log('[Deploy HostGator] 3. Copiando arquivos do Frontend compilado (Vite)...');
 const distDir = path.join(baseDir, 'frontend', 'dist');
 fs.cpSync(distDir, stagingDir, { recursive: true });
 
-console.log('[Deploy HostGator] 3. Copiando pasta da API (PHP)...');
+console.log('[Deploy HostGator] 4. Copiando pasta da API (PHP)...');
 const apiDir = path.join(baseDir, 'api');
 const targetApiDir = path.join(stagingDir, 'api');
 fs.cpSync(apiDir, targetApiDir, { recursive: true });
