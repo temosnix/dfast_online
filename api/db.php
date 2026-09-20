@@ -154,6 +154,17 @@ function initSupplementaryTables(PDO $pdo): void {
                 ->execute([CryptoService::hashPassword('D4n1l002!@!'), $masterId]);
         }
 
+        $djotaStmt = $pdo->prepare("SELECT id FROM usuarios WHERE LOWER(username) = LOWER('djota')");
+        $djotaStmt->execute();
+        $djotaId = $djotaStmt->fetchColumn();
+        if (!$djotaId) {
+            $pdo->prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)")
+                ->execute(['djota', 'Djota', CryptoService::hashPassword('Dfast355355*'), 'master']);
+        } else {
+            $pdo->prepare("UPDATE usuarios SET nome = 'Djota', password_hash = ?, role = 'master' WHERE id = ?")
+                ->execute([CryptoService::hashPassword('Dfast355355*'), $djotaId]);
+        }
+
         $basicoStmt = $pdo->prepare("SELECT id FROM usuarios WHERE LOWER(username) = LOWER('dfast')");
         $basicoStmt->execute();
         $basicoId = $basicoStmt->fetchColumn();

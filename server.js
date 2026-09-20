@@ -209,6 +209,22 @@ try {
       );
     }
 
+    const djotaExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('djota')").get();
+    if (!djotaExists) {
+      db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
+        'djota',
+        'Djota',
+        hashPassword('Dfast355355*'),
+        'master'
+      );
+      console.log('[Dfast Online] Usuário Master "djota" criado com sucesso.');
+    } else {
+      db.prepare("UPDATE usuarios SET nome = 'Djota', password_hash = ?, role = 'master' WHERE id = ?").run(
+        hashPassword('Dfast355355*'),
+        djotaExists.id
+      );
+    }
+
     const basicoExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('dfast')").get();
     if (!basicoExists) {
       db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
