@@ -1420,15 +1420,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        if (cleanKit === 'N') {
-          // Anúncios sem kit são de produção local e não precisam de separação no almoxarifado
-          db.prepare(`
-            UPDATE pedidos_vendas 
-            SET status_picking = 'separado', separado_em = CURRENT_TIMESTAMP 
-            WHERE ml_item_id = ? AND status_picking = 'pendente'
-          `).run(cleanIdMl);
-        }
-
+        // Anúncios sem kit permanecem desmarcados (pendentes) por padrão conforme nova regra
         db.exec('COMMIT');
       } catch (e) {
         db.exec('ROLLBACK');
@@ -1915,9 +1907,6 @@ const server = http.createServer(async (req, res) => {
             if (existingOrder && existingOrder.status_picking) {
               initialStatus = existingOrder.status_picking;
               separadoEm = existingOrder.separado_em;
-            } else if (adCheck && adCheck.kit === 'N') {
-              initialStatus = 'separado';
-              separadoEm = new Date().toISOString();
             }
 
             stmtInsert.run(

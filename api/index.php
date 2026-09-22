@@ -1153,15 +1153,7 @@ try {
                 }
             }
 
-            if ($kit === 'N') {
-                // Anúncios sem kit são de produção local e não precisam de separação no almoxarifado
-                $pdo->prepare("
-                    UPDATE pedidos_vendas 
-                    SET status_picking = 'separado', separado_em = CURRENT_TIMESTAMP 
-                    WHERE ml_item_id = ? AND status_picking = 'pendente'
-                ")->execute([$idMl]);
-            }
-
+            // Anúncios sem kit permanecem desmarcados (pendentes) por padrão conforme nova regra
             $pdo->commit();
         } catch (Exception $e) {
             $pdo->rollBack();
