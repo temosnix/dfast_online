@@ -1298,9 +1298,11 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
-  // 6. /api/purchases
+  // 6. /api/purchases (Reposição Direta por Unidade Desejável)
   if (pathname === '/api/purchases' && req.method === 'GET') {
     try {
+      // Regra: Itens com saldo físico abaixo da unidade desejável (saldo_atual < estoque_desejavel)
+      // Quantidade a Comprar = Unidade Desejável - Saldo Físico Atual
       const sql = `
         SELECT 
           d.id_nissi,
@@ -1310,47 +1312,37 @@ const server = http.createServer(async (req, res) => {
           COALESCE(s.saldo_atual, 0) as saldo_atual,
           COALESCE(s.estoque_minimo, 5) as estoque_minimo,
           COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
-          COALESCE(demanda.total_vendido, 0) as demanda_pendente,
+          (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as compra_desejavel,
+          (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as sugestao_compra,
+          (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as quantidade_comprar,
           CASE 
-            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0)
-              THEN (COALESCE(demanda.total_vendido, 0) - COALESCE(s.saldo_atual, 0) + COALESCE(s.estoque_minimo, 5))
-            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
-              THEN (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0))
-            ELSE 0
-          END as sugestao_compra,
-          CASE 
-            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 'URGENTE (Falta para Envio)'
-            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5) THEN 'Abaixo do Desejável'
-            ELSE 'Estoque Normal'
+            WHEN COALESCE(s.saldo_atual, 0) <= 0 THEN 'Zerado (0 un)'
+            ELSE 'Abaixo do Desejável'
           END as urgencia
         FROM distribuidor d
         LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
-        LEFT JOIN (
-          SELECT 
-            k.id_kit_nissi,
-            SUM(k.qtd_kit * p.quantidade) as total_vendido
-          FROM pedidos_vendas p
-          JOIN kits_anuncio k ON p.ml_item_id = k.id_ml_anuncio
-          WHERE p.status_picking = 'pendente'
-          GROUP BY k.id_kit_nissi
-        ) demanda ON d.id_nissi = demanda.id_kit_nissi
-        WHERE 
-          (COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0))
-          OR (COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5))
+        WHERE COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
         ORDER BY 
-          CASE WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 0 ELSE 1 END,
-          d.descricao ASC
+          CASE WHEN COALESCE(s.saldo_atual, 0) <= 0 THEN 0 ELSE 1 END,
+          COALESCE(d.local, 'S/L') ASC,
+          d.id_nissi ASC
       `;
       const rawPurchases = db.prepare(sql).all();
 
-      const purchases = rawPurchases.map(p => ({
-        ...p,
-        estoque_desejavel: p.estoque_desejavel ?? p.estoque_minimo ?? 5,
-        linha_distribuidor: `${p.id_nissi} - ${p.sugestao_compra}`
-      }));
+      const purchases = rawPurchases.map(p => {
+        const qtdComprar = Math.max(0, Number(p.compra_desejavel || 0));
+        return {
+          ...p,
+          compra_desejavel: qtdComprar,
+          sugestao_compra: qtdComprar,
+          quantidade_comprar: qtdComprar,
+          estoque_desejavel: p.estoque_desejavel ?? p.estoque_minimo ?? 5,
+          linha_distribuidor: `${p.id_nissi} - ${qtdComprar}`
+        };
+      });
 
       const textoCodigoUnidade = purchases.map(p => p.linha_distribuidor).join('\n');
-      const totalUnidades = purchases.reduce((acc, curr) => acc + (curr.sugestao_compra || 0), 0);
+      const totalUnidades = purchases.reduce((acc, curr) => acc + (curr.compra_desejavel || 0), 0);
 
       return sendJson(res, 200, {
         success: true,

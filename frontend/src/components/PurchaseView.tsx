@@ -32,18 +32,26 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedCodigoUnidade, setCopiedCodigoUnidade] = useState(false);
   const [isListModalOpen, setIsListModalOpen] = useState(false);
-  const [filterUrgencia, setFilterUrgencia] = useState<'all' | 'urgente' | 'preventiva'>('all');
+  const [filterUrgencia, setFilterUrgencia] = useState<'all' | 'zerado' | 'parcial'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
+  const getQtdComprar = (item: PurchaseItem) => {
+    if (typeof item.compra_desejavel === 'number') return item.compra_desejavel;
+    if (typeof item.quantidade_comprar === 'number') return item.quantidade_comprar;
+    if (typeof item.sugestao_compra === 'number') return item.sugestao_compra;
+    const desejavel = item.estoque_desejavel ?? item.estoque_minimo ?? 5;
+    return Math.max(0, desejavel - (item.saldo_atual || 0));
+  };
+
   const totalItens = purchases.length;
-  const urgentes = purchases.filter(p => String(p.urgencia || '').includes('URGENTE')).length;
-  const preventivos = totalItens - urgentes;
-  const totalPecas = purchases.reduce((acc, curr) => acc + curr.sugestao_compra, 0);
+  const zerados = purchases.filter(p => (p.saldo_atual || 0) <= 0).length;
+  const parciais = totalItens - zerados;
+  const totalPecas = purchases.reduce((acc, curr) => acc + getQtdComprar(curr), 0);
 
   const filteredPurchases = purchases.filter(p => {
-    const urg = String(p.urgencia || '');
-    if (filterUrgencia === 'urgente' && !urg.includes('URGENTE')) return false;
-    if (filterUrgencia === 'preventiva' && urg.includes('URGENTE')) return false;
+    const isZero = (p.saldo_atual || 0) <= 0;
+    if (filterUrgencia === 'zerado' && !isZero) return false;
+    if (filterUrgencia === 'parcial' && isZero) return false;
 
     const q = (searchQuery || '').toLowerCase().trim();
     if (!q) return true;
@@ -57,8 +65,9 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
 
   const handleCopyCodigoUnidade = () => {
     const lines = filteredPurchases
-      .filter(i => (i.sugestao_compra || 0) > 0)
-      .map(i => `${i.id_nissi} - ${i.sugestao_compra}`)
+      .map(i => ({ code: i.id_nissi, qtd: getQtdComprar(i) }))
+      .filter(x => x.qtd > 0)
+      .map(x => `${x.code} - ${x.qtd}`)
       .join('\n');
     if (!lines) return;
     navigator.clipboard.writeText(lines);
@@ -74,7 +83,10 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
     msg += `-------------------------------------------\n\n`;
 
     filteredPurchases.forEach(item => {
-      msg += `${item.id_nissi} - ${item.sugestao_compra}\n`;
+      const qtd = getQtdComprar(item);
+      if (qtd > 0) {
+        msg += `${item.id_nissi} - ${qtd}\n`;
+      }
     });
 
     msg += `\n-------------------------------------------\n`;
@@ -97,12 +109,12 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-bold text-[10px] uppercase border border-sky-500/30">
-                  Cálculo Inteligente de Reposição
+                  Reposição por Unidade Desejável
                 </span>
                 <h2 className="text-xl font-black text-white">{distribuidorNome}</h2>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Itens calculados com base nas vendas do Mercado Livre e unidades desejáveis em estoque.
+                Itens com saldo físico abaixo da unidade desejável cadastrada para reposição direta.
               </p>
               <div className="flex items-center gap-4 mt-3 text-xs">
                 <span className="text-slate-300">
@@ -112,7 +124,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                   Peças a Adquirir: <strong className="text-sky-400 font-extrabold">{totalPecas} un</strong>
                 </span>
                 <span className="text-red-400 font-semibold">
-                  {urgentes} itens com falta imediata
+                  {zerados} itens zerados no estoque
                 </span>
               </div>
             </div>
@@ -171,24 +183,24 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
             Todos ({totalItens})
           </button>
           <button
-            onClick={() => setFilterUrgencia('urgente')}
+            onClick={() => setFilterUrgencia('zerado')}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              filterUrgencia === 'urgente'
+              filterUrgencia === 'zerado'
                 ? 'bg-red-500/20 text-red-300 border border-red-500/40'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            🚨 Falta Imediata ({urgentes})
+            🚨 Zerados ({zerados})
           </button>
           <button
-            onClick={() => setFilterUrgencia('preventiva')}
+            onClick={() => setFilterUrgencia('parcial')}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              filterUrgencia === 'preventiva'
+              filterUrgencia === 'parcial'
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            ⚠️ Abaixo do Desejável ({preventivos})
+            ⚠️ Saldo Parcial ({parciais})
           </button>
         </div>
 
@@ -218,29 +230,30 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-950/80 border-b border-slate-800 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                  <th className="py-3.5 px-4">Status / Urgência</th>
+                  <th className="py-3.5 px-4">Status / Situação</th>
                   <th className="py-3.5 px-4">Cód. Nissi</th>
                   <th className="py-3.5 px-4">Descrição da Peça</th>
                   <th className="py-3.5 px-4 text-center">Local</th>
                   <th className="py-3.5 px-4 text-center">Saldo Atual</th>
                   <th className="py-3.5 px-4 text-center">Unid. Desejável</th>
-                  <th className="py-3.5 px-4 text-center font-extrabold text-sky-400">Sugestão de Compra</th>
+                  <th className="py-3.5 px-4 text-center font-extrabold text-sky-400">Compra Desejável</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-xs">
                 {filteredPurchases.map(item => {
-                  const isUrgente = item.urgencia.includes('URGENTE');
+                  const isZerado = (item.saldo_atual || 0) <= 0;
+                  const qtdComprar = getQtdComprar(item);
 
                   return (
-                    <tr key={item.id_nissi} className={`hover:bg-slate-800/40 transition-colors ${isUrgente ? 'bg-red-950/10' : ''}`}>
-                      {/* Urgência */}
+                    <tr key={item.id_nissi} className={`hover:bg-slate-800/40 transition-colors ${isZerado ? 'bg-red-950/10' : ''}`}>
+                      {/* Situação */}
                       <td className="py-4 px-4">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-bold text-[10px] uppercase ${
-                          isUrgente
-                            ? 'bg-red-500/20 text-red-300 border border-red-500/40 animate-pulse'
+                          isZerado
+                            ? 'bg-red-500/20 text-red-300 border border-red-500/40'
                             : 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
                         }`}>
-                          {item.urgencia}
+                          {item.urgencia || (isZerado ? 'Zerado (0 un)' : 'Abaixo do Desejável')}
                         </span>
                       </td>
 
@@ -271,10 +284,10 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                         {item.estoque_desejavel ?? item.estoque_minimo} un
                       </td>
 
-                      {/* Sugestão de Compra */}
+                      {/* Compra Desejável */}
                       <td className="py-4 px-4 text-center">
                         <span className="inline-block text-base font-black text-sky-300 bg-sky-500/10 px-3 py-1 rounded-xl border border-sky-500/30">
-                          {item.sugestao_compra} {item.unidade_medida}
+                          {qtdComprar} {item.unidade_medida}
                         </span>
                       </td>
                     </tr>
@@ -327,7 +340,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                 <td className="py-2 px-2 font-bold font-mono">{item.id_nissi}</td>
                 <td className="py-2 px-2">{item.descricao}</td>
                 <td className="py-2 px-2 text-center">{item.unidade_medida}</td>
-                <td className="py-2 px-2 text-center font-bold text-sm">{item.sugestao_compra}</td>
+                <td className="py-2 px-2 text-center font-bold text-sm">{getQtdComprar(item)}</td>
                 <td className="py-2 px-2 text-right">R$ _________</td>
                 <td className="py-2 px-2 text-right">R$ _________</td>
               </tr>

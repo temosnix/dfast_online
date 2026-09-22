@@ -59,17 +59,27 @@ export const PurchaseListModal: React.FC<PurchaseListModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Quantidade a comprar: diferença direta para atingir a unidade desejável
+  const getQtdComprar = (item: PurchaseItem) => {
+    if (typeof item.compra_desejavel === 'number') return item.compra_desejavel;
+    if (typeof item.quantidade_comprar === 'number') return item.quantidade_comprar;
+    if (typeof item.sugestao_compra === 'number') return item.sugestao_compra;
+    const desejavel = item.estoque_desejavel ?? item.estoque_minimo ?? 5;
+    return Math.max(0, desejavel - (item.saldo_atual || 0));
+  };
+
   // Formatar no formato exato solicitado: codigo - unidade
   const formatCodigoUnidade = () => {
     return items
-      .filter(i => (i.sugestao_compra || 0) > 0)
-      .map(i => `${i.id_nissi} - ${i.sugestao_compra}`)
+      .map(i => ({ code: i.id_nissi, qtd: getQtdComprar(i) }))
+      .filter(x => x.qtd > 0)
+      .map(x => `${x.code} - ${x.qtd}`)
       .join('\n');
   };
 
   const listaTexto = formatCodigoUnidade();
   const totalItens = items.length;
-  const totalUnidades = items.reduce((sum, i) => sum + (i.sugestao_compra || 0), 0);
+  const totalUnidades = items.reduce((sum, i) => sum + getQtdComprar(i), 0);
 
   const handleCopyCodigoUnidade = () => {
     if (!listaTexto) return;
@@ -126,7 +136,7 @@ export const PurchaseListModal: React.FC<PurchaseListModalProps> = ({
                 </span>
               </h2>
               <p className="text-xs text-slate-400">
-                Itens abaixo da unidade desejável formatados para envio direto ao fornecedor.
+                Itens com saldo abaixo do desejável formatados para reposição direta.
               </p>
             </div>
           </div>

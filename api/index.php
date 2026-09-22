@@ -1014,12 +1014,11 @@ try {
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/purchases (Gerador de Lista de Compras Nissi)
+    // ROTA: /api/purchases (Reposição Direta por Unidade Desejável)
     // -------------------------------------------------------------
     if ($route === 'purchases' && $method === 'GET') {
-        // Itens que precisam ser comprados:
-        // 1. Demanda para suprir vendas pendentes que excedem o saldo
-        // 2. Reposição de itens abaixo da unidade desejável
+        // Regra: Itens com saldo físico abaixo da unidade desejável (saldo_atual < estoque_desejavel)
+        // Quantidade a Comprar = Unidade Desejável - Saldo Físico Atual
         $sql = "
             SELECT 
                 d.id_nissi,
@@ -1029,36 +1028,20 @@ try {
                 COALESCE(s.saldo_atual, 0) as saldo_atual,
                 COALESCE(s.estoque_minimo, 5) as estoque_minimo,
                 COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
-                COALESCE(demanda.total_vendido, 0) as demanda_pendente,
+                (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as compra_desejavel,
+                (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as sugestao_compra,
+                (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0)) as quantidade_comprar,
                 CASE 
-                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0)
-                        THEN (COALESCE(demanda.total_vendido, 0) - COALESCE(s.saldo_atual, 0) + COALESCE(s.estoque_minimo, 5))
-                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
-                        THEN (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0))
-                    ELSE 0
-                END as sugestao_compra,
-                CASE 
-                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 'URGENTE (Falta para Envio)'
-                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5) THEN 'Abaixo do Desejável'
-                    ELSE 'Estoque Normal'
+                    WHEN COALESCE(s.saldo_atual, 0) <= 0 THEN 'Zerado (0 un)'
+                    ELSE 'Abaixo do Desejável'
                 END as urgencia
             FROM distribuidor d
             LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi
-            LEFT JOIN (
-                SELECT 
-                    k.id_kit_nissi,
-                    SUM(k.qtd_kit * p.quantidade) as total_vendido
-                FROM pedidos_vendas p
-                JOIN kits_anuncio k ON p.ml_item_id = k.id_ml_anuncio
-                WHERE p.status_picking = 'pendente'
-                GROUP BY k.id_kit_nissi
-            ) demanda ON d.id_nissi = demanda.id_kit_nissi
-            WHERE 
-                (COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0))
-                OR (COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5))
+            WHERE COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
             ORDER BY 
-                CASE WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 0 ELSE 1 END,
-                d.descricao ASC
+                CASE WHEN COALESCE(s.saldo_atual, 0) <= 0 THEN 0 ELSE 1 END,
+                COALESCE(d.local, 'S/L') ASC,
+                d.id_nissi ASC
         ";
 
         $rawPurchases = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
@@ -1067,13 +1050,15 @@ try {
         $totalUnidades = 0;
 
         foreach ($rawPurchases as $p) {
-            $sugestao = (int)$p['sugestao_compra'];
-            $linha = "{$p['id_nissi']} - {$sugestao}";
-            $totalUnidades += $sugestao;
+            $qtdComprar = max(0, (int)$p['compra_desejavel']);
+            $linha = "{$p['id_nissi']} - {$qtdComprar}";
+            $totalUnidades += $qtdComprar;
             $linhasDistribuidor[] = $linha;
 
             $purchases[] = array_merge($p, [
-                'sugestao_compra' => $sugestao,
+                'compra_desejavel' => $qtdComprar,
+                'sugestao_compra' => $qtdComprar,
+                'quantidade_comprar' => $qtdComprar,
                 'estoque_desejavel' => (int)($p['estoque_desejavel'] ?? $p['estoque_minimo'] ?? 5),
                 'linha_distribuidor' => $linha
             ]);
@@ -1082,7 +1067,7 @@ try {
         $textoCodigoUnidade = implode("\n", $linhasDistribuidor);
 
         echo json_encode([
-            'success' => true,
+            'success' => true, 
             'distribuidor' => 'Distribuidor Nissi',
             'data_geracao' => date('d/m/Y H:i'),
             'total_itens' => count($purchases),

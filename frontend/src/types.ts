@@ -104,6 +104,8 @@ export interface PurchaseItem {
   estoque_desejavel?: number;
   demanda_pendente: number;
   sugestao_compra: number;
+  compra_desejavel?: number;
+  quantidade_comprar?: number;
   urgencia: string;
   linha_distribuidor?: string;
 }
