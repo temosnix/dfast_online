@@ -12,6 +12,7 @@ import {
   Plus
 } from 'lucide-react';
 import { StockItem } from '../types';
+import { authFetch } from '../api';
 
 interface StockModalProps {
   isOpen: boolean;
@@ -92,7 +93,7 @@ export const StockModal: React.FC<StockModalProps> = ({
         estoque_minimo: Math.max(0, Number(minimo) || 0),
       };
 
-      const res = await fetch(endpoint, {
+      const res = await authFetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),

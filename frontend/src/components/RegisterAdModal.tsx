@@ -13,6 +13,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import { UnregisteredAd, StockItem } from '../types';
+import { authFetch } from '../api';
 
 interface RegisterAdModalProps {
   isOpen: boolean;
@@ -124,7 +125,7 @@ export const RegisterAdModal: React.FC<RegisterAdModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/anuncios/cadastrar', {
+      const res = await authFetch('/api/anuncios/cadastrar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

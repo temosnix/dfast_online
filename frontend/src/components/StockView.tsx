@@ -21,6 +21,7 @@ import {
 import { StockItem, StockMetrics } from '../types';
 import { StockModal } from './StockModal';
 import { StockDeleteModal } from './StockDeleteModal';
+import { authFetch } from '../api';
 
 interface StockViewProps {
   stock: StockItem[];
@@ -142,7 +143,7 @@ export const StockView: React.FC<StockViewProps> = ({
   const handleQuickAdjust = async (item: StockItem, delta: number) => {
     setAdjustingId(item.id_nissi);
     try {
-      const res = await fetch('/api/stock/adjust', {
+      const res = await authFetch('/api/stock/adjust', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

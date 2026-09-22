@@ -12,6 +12,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { AuditLog } from '../types';
+import { authFetch } from '../api';
 
 interface AuditModalProps {
   isOpen: boolean;
@@ -26,7 +27,7 @@ export const AuditModal: React.FC<AuditModalProps> = ({ isOpen, onClose }) => {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/mercadolivre/audit-logs');
+      const res = await authFetch('/api/mercadolivre/audit-logs');
       if (res.ok) {
         const data = await res.json();
         setLogs(data.logs || []);

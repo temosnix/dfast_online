@@ -8,6 +8,7 @@ import {
   ExternalLink 
 } from 'lucide-react';
 import { StockItem } from '../types';
+import { authFetch } from '../api';
 
 interface StockDeleteModalProps {
   isOpen: boolean;
@@ -33,7 +34,7 @@ export const StockDeleteModal: React.FC<StockDeleteModalProps> = ({
     setDeleting(true);
     setError(null);
     try {
-      const res = await fetch('/api/stock/delete', {
+      const res = await authFetch('/api/stock/delete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

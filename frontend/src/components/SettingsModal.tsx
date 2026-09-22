@@ -12,6 +12,7 @@ import {
   Check
 } from 'lucide-react';
 import { MLConfig } from '../types';
+import { getAuthHeaders } from '../api';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -49,13 +50,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [success, setSuccess] = useState(false);
   const [refreshingToken, setRefreshingToken] = useState(false);
   const [tokenMessage, setTokenMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-
-  const getAuthHeaders = () => {
-    const token = localStorage.getItem('dfast_auth_token');
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    return headers;
-  };
 
   const handleRefreshToken = async () => {
     setRefreshingToken(true);
