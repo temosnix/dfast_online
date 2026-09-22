@@ -54,6 +54,78 @@ if (in_array($method, ['POST', 'PUT'])) {
     }
 }
 
+// Helpers para Processamento e Parse de XML NF-e (Distribuidor)
+function extractTagValuePhp($xml, $tagName) {
+    if (preg_match('/<(?:[a-zA-Z0-9_]+:)?' . preg_quote($tagName, '/') . '(?:\s+[^>]*)?>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?' . preg_quote($tagName, '/') . '>/i', $xml, $matches)) {
+        $val = trim($matches[1]);
+        if (preg_match('/^<!\[CDATA\[([\s\S]*?)\]\]>$/i', $val, $cdata)) {
+            $val = trim($cdata[1]);
+        }
+        return $val;
+    }
+    return '';
+}
+
+function parseNfeXmlPhp($xmlString) {
+    if (empty($xmlString)) {
+        throw new Exception('Conteúdo XML vazio.');
+    }
+
+    $nNF = extractTagValuePhp($xmlString, 'nNF');
+    $dhEmi = extractTagValuePhp($xmlString, 'dhEmi');
+    if (empty($dhEmi)) {
+        $dhEmi = extractTagValuePhp($xmlString, 'dEmi');
+    }
+
+    $emitente = '';
+    $cnpj = '';
+    if (preg_match('/<(?:[a-zA-Z0-9_]+:)?emit(?:\s+[^>]*)?>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?emit>/i', $xmlString, $emitMatches)) {
+        $emitContent = $emitMatches[1];
+        $emitente = extractTagValuePhp($emitContent, 'xNome');
+        $cnpj = extractTagValuePhp($emitContent, 'CNPJ');
+    } else {
+        $emitente = extractTagValuePhp($xmlString, 'xNome');
+        $cnpj = extractTagValuePhp($xmlString, 'CNPJ');
+    }
+
+    $items = [];
+    if (preg_match_all('/<(?:[a-zA-Z0-9_]+:)?det(?:\s+[^>]*)?>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?det>/i', $xmlString, $detMatches)) {
+        foreach ($detMatches[1] as $detContent) {
+            $cProd = strtoupper(trim(extractTagValuePhp($detContent, 'cProd')));
+            $xProd = trim(extractTagValuePhp($detContent, 'xProd'));
+            $uComRaw = strtoupper(trim(extractTagValuePhp($detContent, 'uCom')));
+            $uCom = ($uComRaw === 'PAR' || $uComRaw === 'PR') ? 'PAR' : 'UNIDADE';
+            $qComStr = str_replace(',', '.', extractTagValuePhp($detContent, 'qCom'));
+            $vUnComStr = str_replace(',', '.', extractTagValuePhp($detContent, 'vUnCom'));
+
+            $quantidade = (int)round((float)$qComStr);
+            $valorUnitario = (float)$vUnComStr;
+
+            if (!empty($cProd) && $quantidade > 0) {
+                $items[] = [
+                    'cProd' => $cProd,
+                    'xProd' => $xProd,
+                    'uCom' => $uCom,
+                    'quantidade' => $quantidade,
+                    'valorUnitario' => $valorUnitario
+                ];
+            }
+        }
+    }
+
+    if (empty($items)) {
+        throw new Exception('Nenhum item/produto válido encontrado no XML da NF-e.');
+    }
+
+    return [
+        'nNF' => $nNF,
+        'emitente' => $emitente,
+        'cnpj' => $cnpj,
+        'dataEmissao' => $dhEmi,
+        'itens' => $items
+    ];
+}
+
 try {
     // -------------------------------------------------------------
     // ROTAS DE AUTENTICAÇÃO E CONTROLE DE ACESSO (RBAC)
@@ -777,6 +849,165 @@ try {
             echo json_encode(['error' => $e->getMessage()]);
             exit;
         }
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/stock/parse-xml (Parse do XML de NF-e do Distribuidor)
+    // -------------------------------------------------------------
+    if ($route === 'stock/parse-xml' && $method === 'POST') {
+        CryptoService::requireMaster();
+        $xmlContent = trim((string)($input['xml'] ?? ''));
+        if (empty($xmlContent)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Arquivo XML não fornecido ou vazio.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        try {
+            $parsedNfe = parseNfeXmlPhp($xmlContent);
+        } catch (Exception $e) {
+            http_response_code(400);
+            echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stmtDist = $pdo->prepare("SELECT descricao, unidade_medida, local FROM distribuidor WHERE id_nissi = ?");
+        $stmtSaldo = $pdo->prepare("SELECT saldo_atual, ultimo_custo FROM estoque_saldos WHERE id_nissi = ?");
+
+        $itensEnriquecidos = [];
+        $totalUnidades = 0;
+
+        foreach ($parsedNfe['itens'] as $item) {
+            $cProd = $item['cProd'];
+            $stmtDist->execute([$cProd]);
+            $dist = $stmtDist->fetch(PDO::FETCH_ASSOC);
+
+            $stmtSaldo->execute([$cProd]);
+            $saldoRow = $stmtSaldo->fetch(PDO::FETCH_ASSOC);
+
+            $cadastrado = !empty($dist);
+            $saldoAtual = $saldoRow ? (int)$saldoRow['saldo_atual'] : 0;
+            $novoSaldo = $saldoAtual + $item['quantidade'];
+            $ultimoCusto = $saldoRow ? (float)$saldoRow['ultimo_custo'] : 0.0;
+            $totalUnidades += $item['quantidade'];
+
+            $itensEnriquecidos[] = [
+                'cProd' => $cProd,
+                'xProd' => $item['xProd'],
+                'uCom' => $dist ? $dist['unidade_medida'] : $item['uCom'],
+                'quantidade' => (int)$item['quantidade'],
+                'valorUnitario' => (float)$item['valorUnitario'],
+                'cadastrado' => $cadastrado,
+                'descricao_cadastrada' => $dist ? $dist['descricao'] : null,
+                'local_cadastrado' => $dist ? ($dist['local'] ?: 'S/L') : 'S/L',
+                'saldo_atual' => $saldoAtual,
+                'novo_saldo' => $novoSaldo,
+                'ultimo_custo' => $ultimoCusto
+            ];
+        }
+
+        echo json_encode([
+            'success' => true,
+            'nota' => [
+                'nNF' => $parsedNfe['nNF'] ?: 'S/N',
+                'emitente' => $parsedNfe['emitente'] ?: 'Distribuidor',
+                'cnpj' => $parsedNfe['cnpj'] ?: '',
+                'dataEmissao' => $parsedNfe['dataEmissao'] ?: '',
+                'total_itens' => count($itensEnriquecidos),
+                'total_unidades' => $totalUnidades
+            ],
+            'itens' => $itensEnriquecidos
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // -------------------------------------------------------------
+    // ROTA: /api/stock/import-xml (Confirmação e Entrada de Estoque via XML)
+    // -------------------------------------------------------------
+    if ($route === 'stock/import-xml' && $method === 'POST') {
+        CryptoService::requireMaster();
+        $user = CryptoService::getAuthenticatedUser();
+        $username = $user ? $user['username'] : 'master';
+
+        $nNF = trim((string)($input['nNF'] ?? 'S/N'));
+        $emitente = trim((string)($input['emitente'] ?? 'Distribuidor'));
+        $itens = $input['itens'] ?? [];
+
+        if (!is_array($itens) || empty($itens)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Nenhum item fornecido para importação.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $orderRef = 'NF-' . $nNF;
+        $itensImportados = 0;
+        $totalUnidades = 0;
+
+        $pdo->beginTransaction();
+        try {
+            $stmtFindDist = $pdo->prepare("SELECT id_nissi FROM distribuidor WHERE id_nissi = ?");
+            $stmtInsertDist = $pdo->prepare("INSERT INTO distribuidor (id_nissi, descricao, unidade_medida, local) VALUES (?, ?, ?, 'S/L')");
+            $stmtFindSaldo = $pdo->prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?");
+            $stmtUpsertSaldo = $pdo->prepare("
+                INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, ultimo_custo, atualizado_em)
+                VALUES (?, ?, 5, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id_nissi) DO UPDATE SET
+                    saldo_atual = ?,
+                    ultimo_custo = CASE WHEN ? > 0 THEN ? ELSE ultimo_custo END,
+                    atualizado_em = CURRENT_TIMESTAMP
+            ");
+            $stmtMov = $pdo->prepare("
+                INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario)
+                VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?)
+            ");
+
+            foreach ($itens as $item) {
+                $cProd = strtoupper(trim(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', (string)($item['cProd'] ?? ''))));
+                $xProd = trim(strip_tags((string)($item['xProd'] ?? '')));
+                $uCom = (strtoupper(trim((string)($item['uCom'] ?? ''))) === 'PAR') ? 'PAR' : 'UNIDADE';
+                $qtd = max(0, (int)($item['quantidade'] ?? 0));
+                $vUn = (float)($item['valorUnitario'] ?? 0.0);
+
+                if (empty($cProd) || $qtd <= 0) continue;
+
+                // Se não existir, cadastra no distribuidor
+                $stmtFindDist->execute([$cProd]);
+                if (!$stmtFindDist->fetch()) {
+                    $stmtInsertDist->execute([$cProd, !empty($xProd) ? $xProd : $cProd, $uCom]);
+                }
+
+                // Saldo anterior
+                $stmtFindSaldo->execute([$cProd]);
+                $curr = $stmtFindSaldo->fetch(PDO::FETCH_ASSOC);
+                $saldoAnterior = $curr ? (int)$curr['saldo_atual'] : 0;
+                $saldoNovo = $saldoAnterior + $qtd;
+
+                // Upsert saldo
+                $stmtUpsertSaldo->execute([$cProd, $saldoNovo, $vUn, $saldoNovo, $vUn, $vUn]);
+
+                // Movimentação de Entrada
+                $stmtMov->execute([$cProd, $orderRef, $qtd, $saldoAnterior, $saldoNovo, $username]);
+
+                $itensImportados++;
+                $totalUnidades += $qtd;
+            }
+
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => $e->getMessage()], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        echo json_encode([
+            'success' => true,
+            'message' => "Nota Fiscal {$nNF} importada com sucesso! {$itensImportados} produto(s) atualizado(s) (+{$totalUnidades} un).",
+            'nNF' => $nNF,
+            'itens_importados' => $itensImportados,
+            'total_unidades' => $totalUnidades
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
     }
 
     // -------------------------------------------------------------

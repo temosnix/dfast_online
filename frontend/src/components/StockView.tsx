@@ -16,11 +16,13 @@ import {
   MinusCircle,
   PackageCheck,
   Building2,
-  AlertCircle
+  AlertCircle,
+  UploadCloud
 } from 'lucide-react';
 import { StockItem, StockMetrics } from '../types';
 import { StockModal } from './StockModal';
 import { StockDeleteModal } from './StockDeleteModal';
+import { ImportXmlModal } from './ImportXmlModal';
 import { authFetch } from '../api';
 
 interface StockViewProps {
@@ -58,6 +60,9 @@ export const StockView: React.FC<StockViewProps> = ({
   // Delete Modal State
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<StockItem | null>(null);
+
+  // Import XML Modal State
+  const [isImportXmlOpen, setIsImportXmlOpen] = useState(false);
 
   // Quick Adjustment Loading State
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
@@ -346,15 +351,26 @@ export const StockView: React.FC<StockViewProps> = ({
             </div>
           )}
 
-          {/* "+ Novo Item" Button (Exclusivo Master) */}
+          {/* Ações Exclusivas Master: Importar XML e Novo Item */}
           {isMaster && (
-            <button
-              onClick={handleOpenCreate}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all active:scale-95 cursor-pointer ml-auto"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Novo Item</span>
-            </button>
+            <div className="flex items-center gap-2.5 ml-auto">
+              <button
+                onClick={() => setIsImportXmlOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
+                title="Importar unidades de estoque através do arquivo XML da NF-e do distribuidor"
+              >
+                <UploadCloud className="w-4 h-4 stroke-[2.5]" />
+                <span>Importar XML</span>
+              </button>
+
+              <button
+                onClick={handleOpenCreate}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-sky-500/20 transition-all active:scale-95 cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>Novo Item</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -620,6 +636,15 @@ export const StockView: React.FC<StockViewProps> = ({
               setIsDeleteOpen(false);
               setItemToDelete(null);
             }}
+            onSuccess={(msg) => {
+              showNotification(msg);
+              onRefresh();
+            }}
+          />
+
+          <ImportXmlModal
+            isOpen={isImportXmlOpen}
+            onClose={() => setIsImportXmlOpen(false)}
             onSuccess={(msg) => {
               showNotification(msg);
               onRefresh();

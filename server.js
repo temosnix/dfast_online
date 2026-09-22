@@ -371,6 +371,78 @@ function requireAuth(req, res, pathname) {
   return true;
 }
 
+// Helpers para Processamento e Parse de XML NF-e (Distribuidor)
+function extractTagValue(xml, tagName) {
+  const regex = new RegExp(`<(?:[a-zA-Z0-9_]+:)?${tagName}(?:\\s+[^>]*)?>([\\s\\S]*?)<\\/(?:[a-zA-Z0-9_]+:)?${tagName}>`, 'i');
+  const match = xml.match(regex);
+  if (!match) return '';
+  let val = match[1].trim();
+  val = val.replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/i, '$1').trim();
+  return val;
+}
+
+function parseNfeXml(xmlString) {
+  if (!xmlString || typeof xmlString !== 'string') {
+    throw new Error('Conteúdo XML inválido ou vazio.');
+  }
+
+  // Header info (Número NF, data emissão)
+  const nNF = extractTagValue(xmlString, 'nNF');
+  const dhEmi = extractTagValue(xmlString, 'dhEmi') || extractTagValue(xmlString, 'dEmi');
+
+  // Emitente (Tag <emit>)
+  const emitMatch = xmlString.match(/<(?:[a-zA-Z0-9_]+:)?emit(?:\s+[^>]*)?>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?emit>/i);
+  let emitente = '';
+  let cnpjEmitente = '';
+  if (emitMatch) {
+    emitente = extractTagValue(emitMatch[1], 'xNome');
+    cnpjEmitente = extractTagValue(emitMatch[1], 'CNPJ');
+  } else {
+    emitente = extractTagValue(xmlString, 'xNome');
+    cnpjEmitente = extractTagValue(xmlString, 'CNPJ');
+  }
+
+  // Produtos (Tags <det>)
+  const detRegex = /<(?:[a-zA-Z0-9_]+:)?det(?:\s+[^>]*)?>([\s\S]*?)<\/(?:[a-zA-Z0-9_]+:)?det>/gi;
+  const items = [];
+  let match;
+
+  while ((match = detRegex.exec(xmlString)) !== null) {
+    const detContent = match[1];
+    const cProd = extractTagValue(detContent, 'cProd').trim().toUpperCase();
+    const xProd = extractTagValue(detContent, 'xProd').trim();
+    const uComRaw = extractTagValue(detContent, 'uCom').trim().toUpperCase();
+    const uCom = (uComRaw === 'PAR' || uComRaw === 'PR') ? 'PAR' : 'UNIDADE';
+    const qComStr = extractTagValue(detContent, 'qCom').replace(',', '.');
+    const vUnComStr = extractTagValue(detContent, 'vUnCom').replace(',', '.');
+
+    const quantidade = Math.round(parseFloat(qComStr) || 0);
+    const valorUnitario = parseFloat(vUnComStr) || 0.0;
+
+    if (cProd && quantidade > 0) {
+      items.push({
+        cProd,
+        xProd,
+        uCom,
+        quantidade,
+        valorUnitario
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    throw new Error('Nenhum item/produto válido encontrado no XML da NF-e.');
+  }
+
+  return {
+    nNF,
+    emitente,
+    cnpj: cnpjEmitente,
+    dataEmissao: dhEmi,
+    itens: items
+  };
+}
+
 const server = http.createServer(async (req, res) => {
   // CORS Preflight
   if (req.method === 'OPTIONS') {
@@ -1083,6 +1155,143 @@ const server = http.createServer(async (req, res) => {
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });
+    }
+  }
+
+  // 5.5 /api/stock/parse-xml (Parse do XML de NF-e do Distribuidor)
+  if (pathname === '/api/stock/parse-xml' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
+    try {
+      const { xml } = body;
+      if (!xml || typeof xml !== 'string' || !xml.trim()) {
+        return sendJson(res, 400, { error: 'Arquivo XML não fornecido ou vazio.' });
+      }
+
+      const parsedNfe = parseNfeXml(xml);
+
+      // Cruzar itens da NF com catálogo existente e saldos atuais
+      const itensEnriquecidos = parsedNfe.itens.map(item => {
+        const dist = db.prepare("SELECT descricao, unidade_medida, local FROM distribuidor WHERE id_nissi = ?").get(item.cProd);
+        const saldoRow = db.prepare("SELECT saldo_atual, ultimo_custo FROM estoque_saldos WHERE id_nissi = ?").get(item.cProd);
+
+        const cadastrado = !!dist;
+        const saldoAtual = saldoRow ? Number(saldoRow.saldo_atual || 0) : 0;
+        const novoSaldo = saldoAtual + item.quantidade;
+        const ultimoCusto = saldoRow ? Number(saldoRow.ultimo_custo || 0) : 0;
+
+        return {
+          cProd: item.cProd,
+          xProd: item.xProd,
+          uCom: dist ? dist.unidade_medida : item.uCom,
+          quantidade: item.quantidade,
+          valorUnitario: item.valorUnitario,
+          cadastrado,
+          descricao_cadastrada: dist ? dist.descricao : null,
+          local_cadastrado: dist ? (dist.local || 'S/L') : 'S/L',
+          saldo_atual: saldoAtual,
+          novo_saldo: novoSaldo,
+          ultimo_custo: ultimoCusto
+        };
+      });
+
+      const totalUnidades = itensEnriquecidos.reduce((acc, i) => acc + i.quantidade, 0);
+
+      return sendJson(res, 200, {
+        success: true,
+        nota: {
+          nNF: parsedNfe.nNF || 'S/N',
+          emitente: parsedNfe.emitente || 'Distribuidor',
+          cnpj: parsedNfe.cnpj || '',
+          dataEmissao: parsedNfe.dataEmissao || '',
+          total_itens: itensEnriquecidos.length,
+          total_unidades: totalUnidades
+        },
+        itens: itensEnriquecidos
+      });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message || 'Falha ao processar arquivo XML.' });
+    }
+  }
+
+  // 5.6 /api/stock/import-xml (Confirmação e Entrada de Estoque via XML)
+  if (pathname === '/api/stock/import-xml' && req.method === 'POST') {
+    if (!requireMaster(req, res, pathname)) return;
+    try {
+      const { nNF, emitente, itens } = body;
+      if (!Array.isArray(itens) || itens.length === 0) {
+        return sendJson(res, 400, { error: 'Nenhum item fornecido para importação.' });
+      }
+
+      const authUser = getAuthenticatedUser(req);
+      const username = authUser ? authUser.username : 'master';
+      const numNf = String(nNF || 'S/N').trim();
+      const orderRef = `NF-${numNf}`;
+
+      let itensImportados = 0;
+      let totalUnidades = 0;
+
+      db.exec('BEGIN TRANSACTION');
+      try {
+        for (const item of itens) {
+          const cProd = String(item.cProd || '').trim().toUpperCase();
+          const xProd = String(item.xProd || '').trim();
+          const uCom = (String(item.uCom || '').trim().toUpperCase() === 'PAR') ? 'PAR' : 'UNIDADE';
+          const qtd = Math.max(0, parseInt(item.quantidade, 10) || 0);
+          const vUn = parseFloat(item.valorUnitario) || 0.0;
+
+          if (!cProd || qtd <= 0) continue;
+
+          // Se não existir no catálogo do distribuidor, cadastra automaticamente
+          const existingDist = db.prepare("SELECT id_nissi FROM distribuidor WHERE id_nissi = ?").get(cProd);
+          if (!existingDist) {
+            db.prepare(`
+              INSERT INTO distribuidor (id_nissi, descricao, unidade_medida, local)
+              VALUES (?, ?, ?, 'S/L')
+            `).run(cProd, xProd || cProd, uCom);
+          }
+
+          // Busca saldo atual
+          const current = db.prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?").get(cProd);
+          const saldoAnterior = current ? Number(current.saldo_atual || 0) : 0;
+          const saldoNovo = saldoAnterior + qtd;
+
+          // Atualiza saldo e último custo
+          db.prepare(`
+            INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, ultimo_custo, atualizado_em)
+            VALUES (?, ?, 5, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id_nissi) DO UPDATE SET
+              saldo_atual = ?,
+              ultimo_custo = CASE WHEN ? > 0 THEN ? ELSE ultimo_custo END,
+              atualizado_em = CURRENT_TIMESTAMP
+          `).run(cProd, saldoNovo, vUn, saldoNovo, vUn, vUn);
+
+          // Registra movimentação de entrada
+          db.prepare(`
+            INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario)
+            VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?)
+          `).run(cProd, orderRef, qtd, saldoAnterior, saldoNovo, username);
+
+          itensImportados++;
+          totalUnidades += qtd;
+        }
+
+        db.exec('COMMIT');
+      } catch (txErr) {
+        db.exec('ROLLBACK');
+        throw txErr;
+      }
+
+      logSecurityEvent('STOCK_XML_IMPORTED', `Nota Fiscal ${numNf} (${emitente || 'Distribuidor'}) importada por "${username}": ${itensImportados} itens (${totalUnidades} unidades adicionadas).`, req.socket.remoteAddress);
+
+      return sendJson(res, 200, {
+        success: true,
+        message: `Nota Fiscal ${numNf} importada com sucesso! ${itensImportados} produto(s) atualizado(s) (+${totalUnidades} un).`,
+        nNF: numNf,
+        itens_importados: itensImportados,
+        total_unidades: totalUnidades
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message || 'Erro ao processar importação da nota fiscal.' });
     }
   }
 
