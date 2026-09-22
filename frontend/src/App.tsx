@@ -53,7 +53,7 @@ export default function App() {
   const [selectedAdToRegister, setSelectedAdToRegister] = useState<UnregisteredAd | undefined>(undefined);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  const isMaster = currentUser?.role === 'master';
+  const isMaster = currentUser?.role?.toLowerCase() === 'master';
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ type, message });
@@ -260,10 +260,6 @@ export default function App() {
   };
 
   const handleToggleStatus = async (orderId: string) => {
-    if (!isMaster) {
-      showNotification('Apenas usuários Master podem alterar o status do pedido.', 'error');
-      return;
-    }
     try {
       const res = await authFetch('/api/picking/toggle', {
         method: 'POST',

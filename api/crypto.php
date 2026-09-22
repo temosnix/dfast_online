@@ -147,7 +147,14 @@ class CryptoService {
 
     public static function getAuthenticatedUser(): ?array {
         $headers = function_exists('getallheaders') ? getallheaders() : [];
-        $authHeader = $headers['Authorization'] ?? $headers['authorization'] ?? $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        $apacheHeaders = function_exists('apache_request_headers') ? apache_request_headers() : [];
+        $authHeader = $headers['Authorization'] 
+            ?? $headers['authorization'] 
+            ?? $apacheHeaders['Authorization']
+            ?? $apacheHeaders['authorization']
+            ?? $_SERVER['HTTP_AUTHORIZATION'] 
+            ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] 
+            ?? '';
         if (empty($authHeader)) return null;
         $parts = explode(' ', $authHeader, 2);
         if (count($parts) === 2 && strtolower($parts[0]) === 'bearer') {
@@ -158,11 +165,24 @@ class CryptoService {
 
     public static function requireMaster(): ?array {
         $user = self::getAuthenticatedUser();
-        if (!$user || ($user['role'] ?? '') !== 'master') {
+        if (!$user || strtolower($user['role'] ?? '') !== 'master') {
             http_response_code(403);
             echo json_encode([
                 'success' => false,
                 'error' => 'Acesso negado: Operação permitida apenas para o perfil Master.'
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        return $user;
+    }
+
+    public static function requireAuth(): ?array {
+        $user = self::getAuthenticatedUser();
+        if (!$user) {
+            http_response_code(401);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Sessão inválida ou não autenticada.'
             ], JSON_UNESCAPED_UNICODE);
             exit;
         }

@@ -661,26 +661,16 @@ export const PickingView: React.FC<PickingViewProps> = ({
                         <p className="text-xl font-extrabold text-sky-400">{pedido.quantidade} un</p>
                       </div>
 
-                      {isMaster ? (
-                        <button
-                          onClick={() => onToggleStatus(pedido.order_id)}
-                          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            isSeparado
-                              ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
-                          }`}
-                        >
-                          {isSeparado ? 'Desmarcar' : 'Marcar Separado'}
-                        </button>
-                      ) : (
-                        <span className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                      <button
+                        onClick={() => onToggleStatus(pedido.order_id)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                           isSeparado
-                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
-                        }`}>
-                          {isSeparado ? '✓ Separado' : '⏳ Pendente'}
-                        </span>
-                      )}
+                            ? 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                            : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-md shadow-emerald-500/20'
+                        }`}
+                      >
+                        {isSeparado ? 'Desmarcar' : 'Marcar Separado'}
+                      </button>
                     </div>
                   </div>
 

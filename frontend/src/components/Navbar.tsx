@@ -46,7 +46,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   onLogout,
 }) => {
-  const isMaster = currentUser?.role === 'master';
+  const isMaster = currentUser?.role?.toLowerCase() === 'master';
 
   return (
     <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 no-print">

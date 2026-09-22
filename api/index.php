@@ -384,7 +384,7 @@ try {
     // ROTA: /api/picking/toggle (Alternar Status de Separação)
     // -------------------------------------------------------------
     if ($route === 'picking/toggle' && $method === 'POST') {
-        CryptoService::requireMaster();
+        CryptoService::requireAuth();
         $orderId = $input['order_id'] ?? '';
         if (!$orderId) {
             http_response_code(400);

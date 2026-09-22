@@ -225,6 +225,22 @@ try {
       );
     }
 
+    const masterUserExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('master')").get();
+    if (!masterUserExists) {
+      db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
+        'master',
+        'Administrador Master',
+        hashPassword('Dfast355355*'),
+        'master'
+      );
+      console.log('[Dfast Online] Usuário Master "master" criado com sucesso.');
+    } else {
+      db.prepare("UPDATE usuarios SET nome = 'Administrador Master', password_hash = ?, role = 'master' WHERE id = ?").run(
+        hashPassword('Dfast355355*'),
+        masterUserExists.id
+      );
+    }
+
     const basicoExists = db.prepare("SELECT * FROM usuarios WHERE LOWER(username) = LOWER('dfast')").get();
     if (!basicoExists) {
       db.prepare("INSERT INTO usuarios (username, nome, password_hash, role) VALUES (?, ?, ?, ?)").run(
@@ -318,9 +334,18 @@ function sendJson(res, statusCode, data) {
 
 function requireMaster(req, res, pathname) {
   const user = getAuthenticatedUser(req);
-  if (!user || user.role !== 'master') {
+  if (!user || String(user.role || '').toLowerCase() !== 'master') {
     logSecurityEvent('AUTH_FORBIDDEN', `Acesso negado para usuário ${user ? `"${user.username}" (${user.role})` : 'não autenticado'} na rota ${pathname}`, req.socket.remoteAddress);
     sendJson(res, 403, { success: false, error: 'Acesso negado: Operação permitida apenas para o perfil Master.' });
+    return false;
+  }
+  return true;
+}
+
+function requireAuth(req, res, pathname) {
+  const user = getAuthenticatedUser(req);
+  if (!user) {
+    sendJson(res, 401, { success: false, error: 'Sessão inválida ou não autenticada.' });
     return false;
   }
   return true;
@@ -651,7 +676,7 @@ const server = http.createServer(async (req, res) => {
 
   // 3. /api/picking/toggle
   if (pathname === '/api/picking/toggle' && req.method === 'POST') {
-    if (!requireMaster(req, res, pathname)) return;
+    if (!requireAuth(req, res, pathname)) return;
     try {
       const orderId = body.order_id;
       if (!orderId) {
