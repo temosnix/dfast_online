@@ -6,9 +6,6 @@ import {
   Settings, 
   RefreshCw, 
   Trash2, 
-  Clock, 
-  ShieldCheck,
-  AlertTriangle,
   LogOut,
   Crown,
   User as UserIcon
@@ -115,64 +112,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             {/* Controles exclusivos para Master */}
             {isMaster && (
               <>
-                {/* Active ML Token Status Pill */}
-                {mlConfig?.has_access_token ? (
-                  <button 
-                    onClick={openSettings}
-                    type="button"
-                    className="hidden xl:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 text-xs font-semibold cursor-pointer transition-all"
-                    title="Token oficial ativo com AES-256-GCM. Clique para ver detalhes ou renovar."
-                  >
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                    </span>
-                    <span>Token Ativo</span>
-                    {mlConfig.token_expires_at && (
-                      <span className="text-[10px] text-emerald-200/70 font-mono bg-emerald-950/60 px-1.5 py-0.5 rounded">
-                        Até {new Date(mlConfig.token_expires_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    )}
-                  </button>
-                ) : (
-                  <button 
-                    onClick={openSettings}
-                    type="button"
-                    className="hidden xl:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-medium cursor-pointer transition-all"
-                    title="Nenhum token ativo no banco de dados. Clique aqui para configurar ou conectar via OAuth."
-                  >
-                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                    <span>Token Inativo (Configurar)</span>
-                  </button>
-                )}
-
-                {/* Flex Cutoff Pill */}
-                <div className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs font-medium">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Corte Flex: <strong>{flexCutoff}h</strong></span>
-                </div>
-
-                {/* Security Audit Button */}
-                <button
-                  onClick={onOpenAudit}
-                  title="Abrir Trilha de Auditoria de Segurança & LGPD"
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 hover:text-emerald-200 text-xs font-semibold border border-emerald-500/30 transition-all active:scale-95 cursor-pointer"
-                >
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-                  <span className="hidden sm:inline">Auditoria</span>
-                </button>
-
-                {/* Unregistered Ads Alert Badge */}
-                {unregisteredCount > 0 && onOpenRegisterModal && (
-                  <button
-                    onClick={onOpenRegisterModal}
-                    title={`Atenção: Existem ${unregisteredCount} anúncios vendidos sem cadastro no banco! Clique para cadastrar agora.`}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold transition-all animate-pulse active:scale-95 shadow-lg shadow-amber-500/10 cursor-pointer"
-                  >
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
-                    <span>{unregisteredCount} Sem Cadastro</span>
-                  </button>
-                )}
 
                 {/* Sincronização ML */}
                 <button
