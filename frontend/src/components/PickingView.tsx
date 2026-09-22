@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   CheckCircle2, 
   Circle, 
@@ -65,21 +65,38 @@ export const PickingView: React.FC<PickingViewProps> = ({
   const progresso = totalPedidos > 0 ? Math.round((separados / totalPedidos) * 100) : 0;
   const flexPendentes = pedidos.filter(p => p.envio_tipo === 'flex' && p.status_picking === 'pendente').length;
 
-  const pedidosFiltrados = pedidos.filter(p => {
-    if (filterType === 'flex' && p.envio_tipo !== 'flex') return false;
-    if (filterType === 'coleta' && (p.envio_tipo !== 'coleta' && p.envio_tipo !== 'normal')) return false;
+  const pedidosFiltrados = useMemo(() => {
+    return pedidos
+      .filter(p => {
+        if (filterType === 'flex' && p.envio_tipo !== 'flex') return false;
+        if (filterType === 'coleta' && (p.envio_tipo !== 'coleta' && p.envio_tipo !== 'normal')) return false;
 
-    const q = (searchQuery || '').toLowerCase().trim();
-    if (!q) return true;
+        const q = (searchQuery || '').toLowerCase().trim();
+        if (!q) return true;
 
-    const orderIdMatch = String(p.order_id ?? '').toLowerCase().includes(q);
-    const itemMatch = String(p.ml_item_id ?? '').toLowerCase().includes(q);
-    const titleMatch = String(p.titulo ?? '').toLowerCase().includes(q);
-    const compMatch = String(p.comprador ?? '').toLowerCase().includes(q);
-    const caixaMatch = String(p.caixa ?? '').toLowerCase().includes(q);
+        const orderIdMatch = String(p.order_id ?? '').toLowerCase().includes(q);
+        const itemMatch = String(p.ml_item_id ?? '').toLowerCase().includes(q);
+        const titleMatch = String(p.titulo ?? '').toLowerCase().includes(q);
+        const compMatch = String(p.comprador ?? '').toLowerCase().includes(q);
+        const caixaMatch = String(p.caixa ?? '').toLowerCase().includes(q);
 
-    return orderIdMatch || itemMatch || titleMatch || compMatch || caixaMatch;
-  });
+        return orderIdMatch || itemMatch || titleMatch || compMatch || caixaMatch;
+      })
+      .sort((a, b) => {
+        // Regra absoluta: Marcado (separado) vai SEMPRE para o fim da lista, sem exceção
+        const aSep = a.status_picking === 'separado' ? 1 : 0;
+        const bSep = b.status_picking === 'separado' ? 1 : 0;
+        if (aSep !== bSep) return aSep - bSep;
+
+        // Dentro de pendentes (ou dentro de separados), envios Flex primeiro
+        const aFlex = a.envio_tipo === 'flex' ? 0 : 1;
+        const bFlex = b.envio_tipo === 'flex' ? 0 : 1;
+        if (aFlex !== bFlex) return aFlex - bFlex;
+
+        // Ordem cronológica / ID
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
+      });
+  }, [pedidos, filterType, searchQuery]);
 
   const rotaFiltrada = rotaConsolidada.filter(item => {
     const q = (searchQuery || '').toLowerCase().trim();

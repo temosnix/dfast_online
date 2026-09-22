@@ -667,8 +667,8 @@ const server = http.createServer(async (req, res) => {
         LEFT JOIN anuncios a ON p.ml_item_id = a.id_ml
         ${sqlWhere}
         ORDER BY 
+          CASE WHEN p.status_picking = 'separado' THEN 1 ELSE 0 END,
           CASE WHEN p.envio_tipo = 'flex' THEN 0 ELSE 1 END,
-          p.status_picking ASC,
           p.id ASC
       `).all(...queryParams);
 
