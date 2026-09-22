@@ -9,9 +9,12 @@ import {
   Clock, 
   Building2,
   FileSpreadsheet,
-  Search
+  Search,
+  FileText,
+  Share2
 } from 'lucide-react';
 import { PurchaseItem } from '../types';
+import { PurchaseListModal } from './PurchaseListModal';
 
 interface PurchaseViewProps {
   purchases: PurchaseItem[];
@@ -27,6 +30,8 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
   loading,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [copiedCodigoUnidade, setCopiedCodigoUnidade] = useState(false);
+  const [isListModalOpen, setIsListModalOpen] = useState(false);
   const [filterUrgencia, setFilterUrgencia] = useState<'all' | 'urgente' | 'preventiva'>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -38,7 +43,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
   const filteredPurchases = purchases.filter(p => {
     const urg = String(p.urgencia || '');
     if (filterUrgencia === 'urgente' && !urg.includes('URGENTE')) return false;
-    if (filterUrgencia === 'preventiva' && !urg.includes('Preventiva')) return false;
+    if (filterUrgencia === 'preventiva' && urg.includes('URGENTE')) return false;
 
     const q = (searchQuery || '').toLowerCase().trim();
     if (!q) return true;
@@ -50,25 +55,30 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
     return idStr.includes(q) || descStr.includes(q) || localStr.includes(q);
   });
 
+  const handleCopyCodigoUnidade = () => {
+    const lines = filteredPurchases
+      .filter(i => (i.sugestao_compra || 0) > 0)
+      .map(i => `${i.id_nissi} - ${i.sugestao_compra}`)
+      .join('\n');
+    if (!lines) return;
+    navigator.clipboard.writeText(lines);
+    setCopiedCodigoUnidade(true);
+    setTimeout(() => setCopiedCodigoUnidade(false), 2500);
+  };
+
   const handleCopyWhatsApp = () => {
     let msg = `*📦 PEDIDO DE COMPRA - DFAST ONLINE*\n`;
     msg += `*Fornecedor:* ${distribuidorNome}\n`;
     msg += `*Data:* ${new Date().toLocaleDateString('pt-BR')}\n`;
-    msg += `*Total de Peças Solicitadas:* ${totalPecas} un\n`;
+    msg += `*Total de Peças:* ${totalPecas} un (${totalItens} itens)\n`;
     msg += `-------------------------------------------\n\n`;
 
     filteredPurchases.forEach(item => {
-      msg += `🔹 *Cód. Nissi:* ${item.id_nissi}\n`;
-      msg += `   *Qtd:* ${item.sugestao_compra} ${item.unidade_medida}\n`;
-      msg += `   *Item:* ${item.descricao}\n`;
-      if (item.urgencia.includes('URGENTE')) {
-        msg += `   ⚠️ _Urgência: Falta para envio hoje!_\n`;
-      }
-      msg += `\n`;
+      msg += `${item.id_nissi} - ${item.sugestao_compra}\n`;
     });
 
-    msg += `-------------------------------------------\n`;
-    msg += `_Favor confirmar disponibilidade e prazo de faturamento._`;
+    msg += `\n-------------------------------------------\n`;
+    msg += `_Favor confirmar disponibilidade e faturamento._`;
 
     navigator.clipboard.writeText(msg);
     setCopied(true);
@@ -92,7 +102,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                 <h2 className="text-xl font-black text-white">{distribuidorNome}</h2>
               </div>
               <p className="text-xs text-slate-400 mt-1">
-                Itens calculados com base nas vendas do Mercado Livre e saldo mínimo de segurança.
+                Itens calculados com base nas vendas do Mercado Livre e unidades desejáveis em estoque.
               </p>
               <div className="flex items-center gap-4 mt-3 text-xs">
                 <span className="text-slate-300">
@@ -111,19 +121,37 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2.5">
             <button
-              onClick={handleCopyWhatsApp}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all active:scale-95"
+              onClick={() => setIsListModalOpen(true)}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-black text-xs shadow-lg shadow-sky-500/20 transition-all active:scale-95 cursor-pointer"
+              title="Visualizar e copiar lista de compra no formato código - unidade"
             >
-              {copied ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
-              <span>{copied ? 'Copiado para o WhatsApp!' : 'Copiar Pedido (WhatsApp)'}</span>
+              <FileText className="w-4 h-4 stroke-[2.5]" />
+              <span>Gerar Lista (código - unidade)</span>
+            </button>
+
+            <button
+              onClick={handleCopyCodigoUnidade}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition-all active:scale-95 cursor-pointer"
+              title="Copiar lista pura diretamente no formato código - unidade"
+            >
+              {copiedCodigoUnidade ? <Check className="w-4 h-4 text-emerald-400 stroke-[3]" /> : <Copy className="w-4 h-4" />}
+              <span>{copiedCodigoUnidade ? 'Lista Copiada!' : 'Copiar Rápido'}</span>
+            </button>
+
+            <button
+              onClick={handleCopyWhatsApp}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
+            >
+              {copied ? <Check className="w-4 h-4 stroke-[3]" /> : <Share2 className="w-4 h-4" />}
+              <span>{copied ? 'Copiado para WhatsApp!' : 'WhatsApp'}</span>
             </button>
 
             <button
               onClick={() => window.print()}
-              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs border border-slate-700 transition-all active:scale-95"
+              className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs border border-slate-700 transition-all active:scale-95 cursor-pointer"
             >
               <Printer className="w-4 h-4" />
-              <span>Imprimir Cotação</span>
+              <span>Imprimir</span>
             </button>
           </div>
         </div>
@@ -134,7 +162,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
         <div className="flex items-center gap-2">
           <button
             onClick={() => setFilterUrgencia('all')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               filterUrgencia === 'all'
                 ? 'bg-sky-500 text-white'
                 : 'text-slate-400 hover:text-white'
@@ -144,7 +172,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
           </button>
           <button
             onClick={() => setFilterUrgencia('urgente')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               filterUrgencia === 'urgente'
                 ? 'bg-red-500/20 text-red-300 border border-red-500/40'
                 : 'text-slate-400 hover:text-white'
@@ -154,13 +182,13 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
           </button>
           <button
             onClick={() => setFilterUrgencia('preventiva')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
               filterUrgencia === 'preventiva'
                 ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                 : 'text-slate-400 hover:text-white'
             }`}
           >
-            ⚠️ Reposição Preventiva ({preventivos})
+            ⚠️ Abaixo do Desejável ({preventivos})
           </button>
         </div>
 
@@ -183,7 +211,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
           <div className="p-12 text-center text-slate-500">
             <Check className="w-12 h-12 mx-auto text-emerald-500/40 mb-3" />
             <p className="font-semibold text-slate-300">Estoque 100% abastecido!</p>
-            <p className="text-xs mt-1">Nenhum item com necessidade de compra no momento.</p>
+            <p className="text-xs mt-1">Todas as peças estão na unidade desejável. Nenhuma compra necessária.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -195,7 +223,7 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                   <th className="py-3.5 px-4">Descrição da Peça</th>
                   <th className="py-3.5 px-4 text-center">Local</th>
                   <th className="py-3.5 px-4 text-center">Saldo Atual</th>
-                  <th className="py-3.5 px-4 text-center">Mínimo</th>
+                  <th className="py-3.5 px-4 text-center">Unid. Desejável</th>
                   <th className="py-3.5 px-4 text-center font-extrabold text-sky-400">Sugestão de Compra</th>
                 </tr>
               </thead>
@@ -238,9 +266,9 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
                         </span>
                       </td>
 
-                      {/* Mínimo */}
-                      <td className="py-4 px-4 text-center text-slate-400">
-                        {item.estoque_minimo} un
+                      {/* Unidade Desejável */}
+                      <td className="py-4 px-4 text-center text-slate-300 font-semibold">
+                        {item.estoque_desejavel ?? item.estoque_minimo} un
                       </td>
 
                       {/* Sugestão de Compra */}
@@ -257,6 +285,14 @@ export const PurchaseView: React.FC<PurchaseViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal de Lista de Compra no Formato codigo - unidade */}
+      <PurchaseListModal
+        isOpen={isListModalOpen}
+        onClose={() => setIsListModalOpen(false)}
+        purchases={filteredPurchases}
+        distribuidorNome={distribuidorNome}
+      />
 
       {/* PRINT LAYOUT FOR PURCHASE ORDER */}
       <div className="print-only">

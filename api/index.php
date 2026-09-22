@@ -592,6 +592,7 @@ try {
                 COALESCE(d.local, 'S/L') as local,
                 COALESCE(s.saldo_atual, 0) as saldo_atual,
                 COALESCE(s.estoque_minimo, 5) as estoque_minimo,
+                COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
                 (
                     SELECT COUNT(DISTINCT k.id_ml_anuncio)
                     FROM kits_anuncio k
@@ -625,7 +626,7 @@ try {
             SELECT COUNT(*) 
             FROM distribuidor d 
             LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi 
-            WHERE COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
+            WHERE COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
         ")->fetchColumn();
         $unassignedLocalCount = (int)$pdo->query("
             SELECT COUNT(*) 
@@ -640,6 +641,7 @@ try {
                 'total_items' => $totalItems,
                 'total_units' => $totalUnits,
                 'low_stock_count' => $lowStockCount,
+                'below_desired_count' => $lowStockCount,
                 'unassigned_local_count' => $unassignedLocalCount
             ]
         ]);
@@ -656,7 +658,7 @@ try {
         $unidade = (isset($input['unidade_medida']) && strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE';
         $local = isset($input['local']) ? strtoupper(trim(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', $input['local']))) : 'S/L';
         $saldo = isset($input['saldo_atual']) ? max(0, (int)$input['saldo_atual']) : 0;
-        $minimo = isset($input['estoque_minimo']) ? max(0, (int)$input['estoque_minimo']) : 5;
+        $minimo = isset($input['estoque_desejavel']) ? max(0, (int)$input['estoque_desejavel']) : (isset($input['estoque_minimo']) ? max(0, (int)$input['estoque_minimo']) : 5);
 
         if (empty($idNissi)) {
             http_response_code(400);
@@ -706,7 +708,8 @@ try {
         $descricao = isset($input['descricao']) ? trim(strip_tags($input['descricao'])) : null;
         $unidade = isset($input['unidade_medida']) ? ((strtoupper(trim($input['unidade_medida'])) === 'PAR') ? 'PAR' : 'UNIDADE') : null;
         $saldo = isset($input['saldo_atual']) ? max(0, min(1000000, (int)$input['saldo_atual'])) : null;
-        $minimo = isset($input['estoque_minimo']) ? max(0, min(100000, (int)$input['estoque_minimo'])) : null;
+        $desiredRaw = $input['estoque_desejavel'] ?? $input['estoque_minimo'] ?? null;
+        $minimo = $desiredRaw !== null ? max(0, min(100000, (int)$desiredRaw)) : null;
         $novoLocal = isset($input['local']) ? strtoupper(substr(preg_replace('/[^a-zA-Z0-9_\-\.]/', '', trim($input['local'])), 0, 15)) : null;
 
         if (!$idNissi) {
@@ -1016,7 +1019,7 @@ try {
     if ($route === 'purchases' && $method === 'GET') {
         // Itens que precisam ser comprados:
         // 1. Demanda para suprir vendas pendentes que excedem o saldo
-        // 2. Reposição de itens abaixo do estoque mínimo
+        // 2. Reposição de itens abaixo da unidade desejável
         $sql = "
             SELECT 
                 d.id_nissi,
@@ -1025,17 +1028,18 @@ try {
                 COALESCE(d.local, 'S/L') as local,
                 COALESCE(s.saldo_atual, 0) as saldo_atual,
                 COALESCE(s.estoque_minimo, 5) as estoque_minimo,
+                COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
                 COALESCE(demanda.total_vendido, 0) as demanda_pendente,
                 CASE 
                     WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0)
                         THEN (COALESCE(demanda.total_vendido, 0) - COALESCE(s.saldo_atual, 0) + COALESCE(s.estoque_minimo, 5))
-                    WHEN COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
-                        THEN (COALESCE(s.estoque_minimo, 5) * 2 - COALESCE(s.saldo_atual, 0))
+                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
+                        THEN (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0))
                     ELSE 0
                 END as sugestao_compra,
                 CASE 
                     WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 'URGENTE (Falta para Envio)'
-                    WHEN COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5) THEN 'Reposição Preventiva'
+                    WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5) THEN 'Abaixo do Desejável'
                     ELSE 'Estoque Normal'
                 END as urgencia
             FROM distribuidor d
@@ -1051,20 +1055,41 @@ try {
             ) demanda ON d.id_nissi = demanda.id_kit_nissi
             WHERE 
                 (COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0))
-                OR (COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5))
+                OR (COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5))
             ORDER BY 
                 CASE WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 0 ELSE 1 END,
                 d.descricao ASC
         ";
 
-        $purchases = $pdo->query($sql)->fetchAll();
+        $rawPurchases = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $purchases = [];
+        $linhasDistribuidor = [];
+        $totalUnidades = 0;
+
+        foreach ($rawPurchases as $p) {
+            $sugestao = (int)$p['sugestao_compra'];
+            $linha = "{$p['id_nissi']} - {$sugestao}";
+            $totalUnidades += $sugestao;
+            $linhasDistribuidor[] = $linha;
+
+            $purchases[] = array_merge($p, [
+                'sugestao_compra' => $sugestao,
+                'estoque_desejavel' => (int)($p['estoque_desejavel'] ?? $p['estoque_minimo'] ?? 5),
+                'linha_distribuidor' => $linha
+            ]);
+        }
+
+        $textoCodigoUnidade = implode("\n", $linhasDistribuidor);
+
         echo json_encode([
             'success' => true,
             'distribuidor' => 'Distribuidor Nissi',
             'data_geracao' => date('d/m/Y H:i'),
             'total_itens' => count($purchases),
+            'total_unidades' => $totalUnidades,
+            'texto_codigo_unidade' => $textoCodigoUnidade,
             'itens' => $purchases
-        ]);
+        ], JSON_UNESCAPED_UNICODE);
         exit;
     }
 

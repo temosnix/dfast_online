@@ -17,12 +17,14 @@ import {
   PackageCheck,
   Building2,
   AlertCircle,
-  UploadCloud
+  UploadCloud,
+  ShoppingCart
 } from 'lucide-react';
 import { StockItem, StockMetrics } from '../types';
 import { StockModal } from './StockModal';
 import { StockDeleteModal } from './StockDeleteModal';
 import { ImportXmlModal } from './ImportXmlModal';
+import { PurchaseListModal } from './PurchaseListModal';
 import { authFetch } from '../api';
 
 interface StockViewProps {
@@ -64,13 +66,16 @@ export const StockView: React.FC<StockViewProps> = ({
   // Import XML Modal State
   const [isImportXmlOpen, setIsImportXmlOpen] = useState(false);
 
+  // Purchase List Modal State (código - unidade)
+  const [isPurchaseListModalOpen, setIsPurchaseListModalOpen] = useState(false);
+
   // Quick Adjustment Loading State
   const [adjustingId, setAdjustingId] = useState<string | null>(null);
 
   // Calculated Metrics fallback
   const totalItems = metrics?.total_items ?? stock.length;
   const totalUnits = metrics?.total_units ?? stock.reduce((sum, item) => sum + (item.saldo_atual || 0), 0);
-  const lowStockCount = metrics?.low_stock_count ?? stock.filter(item => (item.saldo_atual || 0) <= (item.estoque_minimo || 5)).length;
+  const lowStockCount = metrics?.below_desired_count ?? metrics?.low_stock_count ?? stock.filter(item => (item.saldo_atual || 0) < (item.estoque_desejavel ?? item.estoque_minimo ?? 5)).length;
   const unassignedLocalCount = metrics?.unassigned_local_count ?? stock.filter(item => !item.local || item.local === 'S/L' || item.local.trim() === '').length;
 
   // Extract unique aisles from locations
@@ -92,7 +97,7 @@ export const StockView: React.FC<StockViewProps> = ({
       .filter(item => {
         // Status filter
         if (statusFilter === 'low_stock') {
-          const isLow = (item.saldo_atual || 0) <= (item.estoque_minimo || 5);
+          const isLow = (item.saldo_atual || 0) < (item.estoque_desejavel ?? item.estoque_minimo ?? 5);
           if (!isLow) return false;
         } else if (statusFilter === 'unassigned_local') {
           const isUnassigned = !item.local || item.local === 'S/L' || item.local.trim() === '';
@@ -240,17 +245,17 @@ export const StockView: React.FC<StockViewProps> = ({
           }`}
         >
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-amber-300">Estoque Baixo / Mínimo</span>
+            <span className="text-xs font-bold uppercase tracking-wider text-amber-300">Abaixo do Desejável</span>
             <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center border border-amber-500/30">
               <AlertTriangle className="w-5 h-5" />
             </div>
           </div>
           <div className="flex items-baseline gap-2 mt-2">
             <h3 className="text-3xl font-extrabold text-amber-300">{lowStockCount}</h3>
-            <span className="text-xs text-slate-400">itens críticos</span>
+            <span className="text-xs text-slate-400">itens p/ reposição</span>
           </div>
           <p className="text-xs text-amber-300/80 mt-2 font-medium">
-            {statusFilter === 'low_stock' ? '✓ Filtro ativo (clique para limpar)' : 'Clique para filtrar peças em falta'}
+            {statusFilter === 'low_stock' ? '✓ Filtro ativo (clique para limpar)' : 'Clique para filtrar peças a comprar'}
           </p>
         </div>
 
@@ -311,7 +316,7 @@ export const StockView: React.FC<StockViewProps> = ({
                 statusFilter === 'low_stock' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-white'
               }`}
             >
-              🚨 Estoque Baixo ({lowStockCount})
+              🚨 Abaixo do Desejável ({lowStockCount})
             </button>
             <button
               onClick={() => setStatusFilter('unassigned_local')}
@@ -351,9 +356,18 @@ export const StockView: React.FC<StockViewProps> = ({
             </div>
           )}
 
-          {/* Ações Exclusivas Master: Importar XML e Novo Item */}
+          {/* Ações Exclusivas Master: Gerar Lista de Compra, Importar XML e Novo Item */}
           {isMaster && (
             <div className="flex items-center gap-2.5 ml-auto">
+              <button
+                onClick={() => setIsPurchaseListModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-amber-500/20 transition-all active:scale-95 cursor-pointer"
+                title="Gerar lista de compra no formato 'codigo - unidade' para enviar ao distribuidor"
+              >
+                <ShoppingCart className="w-4 h-4 stroke-[2.5]" />
+                <span>Gerar Lista de Compra</span>
+              </button>
+
               <button
                 onClick={() => setIsImportXmlOpen(true)}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs shadow-lg shadow-emerald-500/20 transition-all active:scale-95 cursor-pointer"
@@ -466,8 +480,8 @@ export const StockView: React.FC<StockViewProps> = ({
                     </div>
                   </th>
 
-                  {/* Estoque Mínimo */}
-                  <th className="py-3.5 px-4 text-center">Mínimo</th>
+                  {/* Estoque Desejável */}
+                  <th className="py-3.5 px-4 text-center">Unid. Desejável</th>
 
                   {/* Anúncios ML */}
                   <th 
@@ -489,7 +503,7 @@ export const StockView: React.FC<StockViewProps> = ({
 
               <tbody className="divide-y divide-slate-800/60 text-xs">
                 {filteredAndSortedStock.map(item => {
-                  const isLowStock = item.saldo_atual <= item.estoque_minimo;
+                  const isLowStock = item.saldo_atual < (item.estoque_desejavel ?? item.estoque_minimo);
                   const isAdjusting = adjustingId === item.id_nissi;
 
                   return (
@@ -568,9 +582,9 @@ export const StockView: React.FC<StockViewProps> = ({
                         )}
                       </td>
 
-                      {/* Estoque Mínimo */}
+                      {/* Estoque Desejável */}
                       <td className="py-4 px-4 text-center font-bold text-slate-400">
-                        {item.estoque_minimo} un
+                        {item.estoque_desejavel ?? item.estoque_minimo} un
                       </td>
 
                       {/* Anúncios Vinculados */}
@@ -612,7 +626,12 @@ export const StockView: React.FC<StockViewProps> = ({
         )}
       </div>
 
-      {/* 4. Modals (Exclusivos Master) */}
+      {/* 4. Modals */}
+      <PurchaseListModal
+        isOpen={isPurchaseListModalOpen}
+        onClose={() => setIsPurchaseListModalOpen(false)}
+      />
+
       {isMaster && (
         <>
           <StockModal

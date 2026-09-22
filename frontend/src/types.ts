@@ -82,6 +82,7 @@ export interface StockItem {
   local: string;
   saldo_atual: number;
   estoque_minimo: number;
+  estoque_desejavel?: number;
   total_anuncios_vinculados: number;
 }
 
@@ -89,6 +90,7 @@ export interface StockMetrics {
   total_items: number;
   total_units: number;
   low_stock_count: number;
+  below_desired_count?: number;
   unassigned_local_count: number;
 }
 
@@ -99,9 +101,11 @@ export interface PurchaseItem {
   local: string;
   saldo_atual: number;
   estoque_minimo: number;
+  estoque_desejavel?: number;
   demanda_pendente: number;
   sugestao_compra: number;
   urgencia: string;
+  linha_distribuidor?: string;
 }
 
 export interface MLConfig {

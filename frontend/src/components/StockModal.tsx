@@ -50,13 +50,13 @@ export const StockModal: React.FC<StockModalProps> = ({
       setUnidade((item.unidade_medida && item.unidade_medida.toUpperCase() === 'PAR') ? 'PAR' : 'UNIDADE');
       setLocal(item.local === 'S/L' ? '' : (item.local || ''));
       setSaldo(item.saldo_atual);
-      setMinimo(item.estoque_minimo);
+      setMinimo(item.estoque_desejavel ?? item.estoque_minimo);
     } else {
       setIdNissi('');
       setDescricao('');
       setUnidade('UNIDADE');
       setLocal('');
-      setSaldo(10);
+      setSaldo(0);
       setMinimo(5);
     }
     setError(null);
@@ -91,6 +91,7 @@ export const StockModal: React.FC<StockModalProps> = ({
         local: cleanLocal,
         saldo_atual: Math.max(0, Number(saldo) || 0),
         estoque_minimo: Math.max(0, Number(minimo) || 0),
+        estoque_desejavel: Math.max(0, Number(minimo) || 0),
       };
 
       const res = await authFetch(endpoint, {
@@ -129,8 +130,8 @@ export const StockModal: React.FC<StockModalProps> = ({
               </h2>
               <p className="text-xs text-slate-400">
                 {mode === 'create' 
-                  ? 'Cadastre uma nova peça com endereço no galpão e saldos de reposição.'
-                  : 'Altere a descrição, prateleira ou níveis de estoque desta peça.'}
+                  ? 'Cadastre uma nova peça com endereço no galpão e unidade desejável de estoque.'
+                  : 'Altere a descrição, prateleira ou unidade desejável desta peça.'}
               </p>
             </div>
           </div>
@@ -248,20 +249,20 @@ export const StockModal: React.FC<StockModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1.5">
-                Estoque Mínimo de Segurança
+                Unidade Desejável (Estoque Ideal)
               </label>
               <div className="relative">
-                <AlertTriangle className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <Box className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="number"
                   min="0"
                   required
                   value={minimo}
                   onChange={e => setMinimo(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm font-extrabold text-amber-300 focus:outline-none focus:border-amber-500 transition-all"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-sm font-extrabold text-sky-300 focus:outline-none focus:border-sky-500 transition-all"
                 />
               </div>
-              <span className="text-[11px] text-slate-500">Dispara alerta para compra se atingido.</span>
+              <span className="text-[11px] text-slate-500">Saldo desejado. Abaixo deste valor, gera lista de compra.</span>
             </div>
           </div>
 

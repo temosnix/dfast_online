@@ -898,6 +898,7 @@ const server = http.createServer(async (req, res) => {
           COALESCE(d.local, 'S/L') as local,
           COALESCE(s.saldo_atual, 0) as saldo_atual,
           COALESCE(s.estoque_minimo, 5) as estoque_minimo,
+          COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
           (
             SELECT COUNT(DISTINCT k.id_ml_anuncio)
             FROM kits_anuncio k
@@ -928,7 +929,7 @@ const server = http.createServer(async (req, res) => {
         SELECT COUNT(*) as c 
         FROM distribuidor d 
         LEFT JOIN estoque_saldos s ON d.id_nissi = s.id_nissi 
-        WHERE COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
+        WHERE COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
       `).get().c;
       const unassignedLocalCount = db.prepare(`
         SELECT COUNT(*) as c 
@@ -943,6 +944,7 @@ const server = http.createServer(async (req, res) => {
           total_items: totalItems,
           total_units: totalUnits,
           low_stock_count: lowStockCount,
+          below_desired_count: lowStockCount,
           unassigned_local_count: unassignedLocalCount
         }
       });
@@ -955,7 +957,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/stock/create' && req.method === 'POST') {
     if (!requireMaster(req, res, pathname)) return;
     try {
-      const { id_nissi, descricao, unidade_medida, local, saldo_atual, estoque_minimo } = body;
+      const { id_nissi, descricao, unidade_medida, local, saldo_atual, estoque_minimo, estoque_desejavel } = body;
       if (!id_nissi || !String(id_nissi).trim()) {
         return sendJson(res, 400, { error: 'Código Nissi é obrigatório' });
       }
@@ -967,7 +969,7 @@ const server = http.createServer(async (req, res) => {
       const cleanUnidade = (String(unidade_medida || '').trim().toUpperCase() === 'PAR') ? 'PAR' : 'UNIDADE';
       const cleanLocal = String(local || 'S/L').trim().toUpperCase();
       const saldo = Math.max(0, parseInt(saldo_atual ?? 0, 10) || 0);
-      const minimo = Math.max(0, parseInt(estoque_minimo ?? 5, 10) || 5);
+      const minimo = Math.max(0, parseInt(estoque_desejavel ?? estoque_minimo ?? 5, 10) || 5);
 
       const existing = db.prepare("SELECT id_nissi FROM distribuidor WHERE id_nissi = ?").get(cleanId);
       if (existing) {
@@ -1007,7 +1009,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/stock/update' && req.method === 'POST') {
     if (!requireMaster(req, res, pathname)) return;
     try {
-      const { id_nissi, descricao, unidade_medida, saldo_atual, estoque_minimo, local } = body;
+      const { id_nissi, descricao, unidade_medida, saldo_atual, estoque_minimo, estoque_desejavel, local } = body;
       if (!id_nissi) {
         return sendJson(res, 400, { error: 'id_nissi é obrigatório' });
       }
@@ -1032,9 +1034,10 @@ const server = http.createServer(async (req, res) => {
             .run(newDesc, newUnidade, newLocal, cleanId);
         }
 
-        if (saldo_atual !== undefined || estoque_minimo !== undefined) {
+        const desiredRaw = estoque_desejavel !== undefined ? estoque_desejavel : estoque_minimo;
+        if (saldo_atual !== undefined || desiredRaw !== undefined) {
           const saldo = saldo_atual !== undefined ? Math.max(0, parseInt(saldo_atual, 10) || 0) : null;
-          const minimo = estoque_minimo !== undefined ? Math.max(0, parseInt(estoque_minimo, 10) || 0) : null;
+          const minimo = desiredRaw !== undefined ? Math.max(0, parseInt(desiredRaw, 10) || 0) : null;
 
           db.prepare(`
             INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em)
@@ -1306,17 +1309,18 @@ const server = http.createServer(async (req, res) => {
           COALESCE(d.local, 'S/L') as local,
           COALESCE(s.saldo_atual, 0) as saldo_atual,
           COALESCE(s.estoque_minimo, 5) as estoque_minimo,
+          COALESCE(s.estoque_minimo, 5) as estoque_desejavel,
           COALESCE(demanda.total_vendido, 0) as demanda_pendente,
           CASE 
             WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0)
               THEN (COALESCE(demanda.total_vendido, 0) - COALESCE(s.saldo_atual, 0) + COALESCE(s.estoque_minimo, 5))
-            WHEN COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5)
-              THEN (COALESCE(s.estoque_minimo, 5) * 2 - COALESCE(s.saldo_atual, 0))
+            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5)
+              THEN (COALESCE(s.estoque_minimo, 5) - COALESCE(s.saldo_atual, 0))
             ELSE 0
           END as sugestao_compra,
           CASE 
             WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 'URGENTE (Falta para Envio)'
-            WHEN COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5) THEN 'Reposição Preventiva'
+            WHEN COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5) THEN 'Abaixo do Desejável'
             ELSE 'Estoque Normal'
           END as urgencia
         FROM distribuidor d
@@ -1332,18 +1336,29 @@ const server = http.createServer(async (req, res) => {
         ) demanda ON d.id_nissi = demanda.id_kit_nissi
         WHERE 
           (COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0))
-          OR (COALESCE(s.saldo_atual, 0) <= COALESCE(s.estoque_minimo, 5))
+          OR (COALESCE(s.saldo_atual, 0) < COALESCE(s.estoque_minimo, 5))
         ORDER BY 
           CASE WHEN COALESCE(s.saldo_atual, 0) < COALESCE(demanda.total_vendido, 0) THEN 0 ELSE 1 END,
           d.descricao ASC
       `;
-      const purchases = db.prepare(sql).all();
+      const rawPurchases = db.prepare(sql).all();
+
+      const purchases = rawPurchases.map(p => ({
+        ...p,
+        estoque_desejavel: p.estoque_desejavel ?? p.estoque_minimo ?? 5,
+        linha_distribuidor: `${p.id_nissi} - ${p.sugestao_compra}`
+      }));
+
+      const textoCodigoUnidade = purchases.map(p => p.linha_distribuidor).join('\n');
+      const totalUnidades = purchases.reduce((acc, curr) => acc + (curr.sugestao_compra || 0), 0);
 
       return sendJson(res, 200, {
         success: true,
         distribuidor: 'Distribuidor Nissi',
         data_geracao: new Date().toLocaleString('pt-BR'),
         total_itens: purchases.length,
+        total_unidades: totalUnidades,
+        texto_codigo_unidade: textoCodigoUnidade,
         itens: purchases,
       });
     } catch (err) {
