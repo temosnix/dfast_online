@@ -266,10 +266,12 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ order_id: orderId }),
       });
-      if (res.ok) {
+      const d = await res.json();
+      if (res.ok && d.success) {
         loadData(tipoOrigem);
+        loadStock();
+        showNotification(d.message || 'Status do pedido atualizado!');
       } else {
-        const d = await res.json();
         showNotification(d.error || 'Falha ao alternar status do pedido', 'error');
       }
     } catch (err) {

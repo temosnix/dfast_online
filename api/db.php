@@ -138,7 +138,37 @@ function initSupplementaryTables(PDO $pdo): void {
             criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
             ultimo_login DATETIME
         );
+
+        CREATE TABLE IF NOT EXISTS estoque_movimentacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_nissi TEXT NOT NULL,
+            order_id TEXT,
+            tipo TEXT NOT NULL CHECK(tipo IN ('SAIDA_PICKING', 'ESTORNO_PICKING', 'AJUSTE_MANUAL', 'ENTRADA')),
+            quantidade INTEGER NOT NULL,
+            saldo_anterior INTEGER NOT NULL,
+            saldo_novo INTEGER NOT NULL,
+            usuario TEXT DEFAULT 'sistema',
+            criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (id_nissi) REFERENCES distribuidor (id_nissi)
+        );
     ");
+
+    // Migração de coluna estoque_deduzido em pedidos_vendas
+    try {
+        $cols = $pdo->query("PRAGMA table_info(pedidos_vendas)")->fetchAll(PDO::FETCH_ASSOC);
+        $hasDeduzido = false;
+        foreach ($cols as $col) {
+            if ($col['name'] === 'estoque_deduzido') {
+                $hasDeduzido = true;
+                break;
+            }
+        }
+        if (!$hasDeduzido) {
+            $pdo->exec("ALTER TABLE pedidos_vendas ADD COLUMN estoque_deduzido INTEGER DEFAULT 0");
+        }
+    } catch (Exception $e) {
+        // Silencioso se já existir
+    }
 
     // Inicialização e Sincronização dos Usuários Padrão (RBAC)
     require_once __DIR__ . '/crypto.php';

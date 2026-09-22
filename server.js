@@ -189,7 +189,27 @@ try {
       criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
       ultimo_login DATETIME
     );
+
+    CREATE TABLE IF NOT EXISTS estoque_movimentacoes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id_nissi TEXT NOT NULL,
+      order_id TEXT,
+      tipo TEXT NOT NULL CHECK(tipo IN ('SAIDA_PICKING', 'ESTORNO_PICKING', 'AJUSTE_MANUAL', 'ENTRADA')),
+      quantidade INTEGER NOT NULL,
+      saldo_anterior INTEGER NOT NULL,
+      saldo_novo INTEGER NOT NULL,
+      usuario TEXT DEFAULT 'sistema',
+      criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (id_nissi) REFERENCES distribuidor (id_nissi)
+    );
   `);
+
+  try {
+    const cols = db.prepare("PRAGMA table_info(pedidos_vendas)").all();
+    if (!cols.some(c => c.name === 'estoque_deduzido')) {
+      db.exec("ALTER TABLE pedidos_vendas ADD COLUMN estoque_deduzido INTEGER DEFAULT 0");
+    }
+  } catch (err) {}
 
   // Inicialização e Sincronização dos Usuários Padrão (RBAC)
   try {
@@ -683,21 +703,109 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 400, { error: 'order_id é obrigatório' });
       }
 
-      const current = db.prepare("SELECT status_picking FROM pedidos_vendas WHERE order_id = ?").get(orderId);
-      if (!current) {
+      const authUser = getAuthenticatedUser(req);
+      const username = authUser ? authUser.username : 'sistema';
+
+      const pedido = db.prepare("SELECT * FROM pedidos_vendas WHERE order_id = ?").get(orderId);
+      if (!pedido) {
         return sendJson(res, 404, { error: 'Pedido não encontrado' });
       }
 
-      const newStatus = current.status_picking === 'separado' ? 'pendente' : 'separado';
+      const newStatus = pedido.status_picking === 'separado' ? 'pendente' : 'separado';
       const separadoEm = newStatus === 'separado' ? new Date().toISOString() : null;
 
-      db.prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = ? WHERE order_id = ?").run(newStatus, separadoEm, orderId);
+      // Buscar componentes do kit vinculado a este anúncio
+      const componentes = db.prepare("SELECT id_kit_nissi, qtd_kit FROM kits_anuncio WHERE id_ml_anuncio = ?").all(pedido.ml_item_id);
+
+      const itemsAffected = [];
+
+      db.exec('BEGIN');
+      try {
+        if (newStatus === 'separado') {
+          // Só deduz se ainda não estava deduzido (idempotência)
+          if (!pedido.estoque_deduzido && componentes.length > 0) {
+            for (const comp of componentes) {
+              const qtdBaixar = (pedido.quantidade || 1) * (comp.qtd_kit || 1);
+              const saldoRow = db.prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?").get(comp.id_kit_nissi);
+              const saldoAnterior = saldoRow ? Number(saldoRow.saldo_atual || 0) : 0;
+              const saldoNovo = saldoAnterior - qtdBaixar;
+
+              if (saldoRow) {
+                db.prepare("UPDATE estoque_saldos SET saldo_atual = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id_nissi = ?")
+                  .run(saldoNovo, comp.id_kit_nissi);
+              } else {
+                db.prepare("INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em) VALUES (?, ?, 5, CURRENT_TIMESTAMP)")
+                  .run(comp.id_kit_nissi, saldoNovo);
+              }
+
+              db.prepare(`
+                INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario)
+                VALUES (?, ?, 'SAIDA_PICKING', ?, ?, ?, ?)
+              `).run(comp.id_kit_nissi, orderId, qtdBaixar, saldoAnterior, saldoNovo, username);
+
+              itemsAffected.push({
+                id_nissi: comp.id_kit_nissi,
+                qtd: qtdBaixar,
+                saldo_anterior: saldoAnterior,
+                saldo_novo: saldoNovo,
+                tipo: 'SAIDA_PICKING'
+              });
+            }
+          }
+          db.prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = ?, estoque_deduzido = 1 WHERE order_id = ?")
+            .run(newStatus, separadoEm, orderId);
+        } else {
+          // Desmarcar pedido: estorna se estava deduzido
+          if (pedido.estoque_deduzido && componentes.length > 0) {
+            for (const comp of componentes) {
+              const qtdEstornar = (pedido.quantidade || 1) * (comp.qtd_kit || 1);
+              const saldoRow = db.prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?").get(comp.id_kit_nissi);
+              const saldoAnterior = saldoRow ? Number(saldoRow.saldo_atual || 0) : 0;
+              const saldoNovo = saldoAnterior + qtdEstornar;
+
+              if (saldoRow) {
+                db.prepare("UPDATE estoque_saldos SET saldo_atual = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id_nissi = ?")
+                  .run(saldoNovo, comp.id_kit_nissi);
+              } else {
+                db.prepare("INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em) VALUES (?, ?, 5, CURRENT_TIMESTAMP)")
+                  .run(comp.id_kit_nissi, saldoNovo);
+              }
+
+              db.prepare(`
+                INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario)
+                VALUES (?, ?, 'ESTORNO_PICKING', ?, ?, ?, ?)
+              `).run(comp.id_kit_nissi, orderId, qtdEstornar, saldoAnterior, saldoNovo, username);
+
+              itemsAffected.push({
+                id_nissi: comp.id_kit_nissi,
+                qtd: qtdEstornar,
+                saldo_anterior: saldoAnterior,
+                saldo_novo: saldoNovo,
+                tipo: 'ESTORNO_PICKING'
+              });
+            }
+          }
+          db.prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = NULL, estoque_deduzido = 0 WHERE order_id = ?")
+            .run(newStatus, orderId);
+        }
+        db.exec('COMMIT');
+      } catch (txErr) {
+        db.exec('ROLLBACK');
+        throw txErr;
+      }
 
       return sendJson(res, 200, {
         success: true,
         order_id: orderId,
         new_status: newStatus,
-        message: `Pedido ${orderId} marcado como ${newStatus}!`
+        items_affected: itemsAffected,
+        message: newStatus === 'separado'
+          ? (itemsAffected.length > 0 
+              ? `Pedido separado! ${itemsAffected.length} peça(s) deduzida(s) do estoque.` 
+              : `Pedido separado! (Item próprio sem peças Nissi)`)
+          : (itemsAffected.length > 0 
+              ? `Pedido desmarcado! ${itemsAffected.length} peça(s) estornada(s) ao estoque.` 
+              : `Pedido desmarcado!`)
       });
     } catch (err) {
       return sendJson(res, 500, { error: err.message });

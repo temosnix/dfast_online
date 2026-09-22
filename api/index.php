@@ -381,10 +381,12 @@ try {
     }
 
     // -------------------------------------------------------------
-    // ROTA: /api/picking/toggle (Alternar Status de Separação)
+    // ROTA: /api/picking/toggle (Alternar Status de Separação & Movimentar Estoque)
     // -------------------------------------------------------------
     if ($route === 'picking/toggle' && $method === 'POST') {
-        CryptoService::requireAuth();
+        $authUser = CryptoService::requireAuth();
+        $username = $authUser['username'] ?? 'sistema';
+
         $orderId = $input['order_id'] ?? '';
         if (!$orderId) {
             http_response_code(400);
@@ -392,28 +394,114 @@ try {
             exit;
         }
 
-        $current = $pdo->prepare("SELECT status_picking FROM pedidos_vendas WHERE order_id = ?");
+        $current = $pdo->prepare("SELECT * FROM pedidos_vendas WHERE order_id = ?");
         $current->execute([$orderId]);
-        $row = $current->fetch();
+        $pedido = $current->fetch(PDO::FETCH_ASSOC);
 
-        if (!$row) {
+        if (!$pedido) {
             http_response_code(404);
             echo json_encode(['error' => 'Pedido não encontrado']);
             exit;
         }
 
-        $newStatus = ($row['status_picking'] === 'separado') ? 'pendente' : 'separado';
+        $newStatus = ($pedido['status_picking'] === 'separado') ? 'pendente' : 'separado';
         $separadoEm = ($newStatus === 'separado') ? date('Y-m-d H:i:s') : null;
 
-        $update = $pdo->prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = ? WHERE order_id = ?");
-        $update->execute([$newStatus, $separadoEm, $orderId]);
+        // Buscar componentes do anúncio
+        $compStmt = $pdo->prepare("SELECT id_kit_nissi, qtd_kit FROM kits_anuncio WHERE id_ml_anuncio = ?");
+        $compStmt->execute([$pedido['ml_item_id']]);
+        $componentes = $compStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $itemsAffected = [];
+
+        $pdo->beginTransaction();
+        try {
+            if ($newStatus === 'separado') {
+                if (empty($pedido['estoque_deduzido']) && count($componentes) > 0) {
+                    foreach ($componentes as $comp) {
+                        $qtdBaixar = ((int)($pedido['quantidade'] ?? 1)) * ((int)($comp['qtd_kit'] ?? 1));
+                        
+                        $saldoStmt = $pdo->prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?");
+                        $saldoStmt->execute([$comp['id_kit_nissi']]);
+                        $saldoRow = $saldoStmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        $saldoAnterior = $saldoRow ? (int)$saldoRow['saldo_atual'] : 0;
+                        $saldoNovo = $saldoAnterior - $qtdBaixar;
+
+                        if ($saldoRow) {
+                            $pdo->prepare("UPDATE estoque_saldos SET saldo_atual = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id_nissi = ?")
+                                ->execute([$saldoNovo, $comp['id_kit_nissi']]);
+                        } else {
+                            $pdo->prepare("INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em) VALUES (?, ?, 5, CURRENT_TIMESTAMP)")
+                                ->execute([$comp['id_kit_nissi'], $saldoNovo]);
+                        }
+
+                        $pdo->prepare("INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario) VALUES (?, ?, 'SAIDA_PICKING', ?, ?, ?, ?)")
+                            ->execute([$comp['id_kit_nissi'], $orderId, $qtdBaixar, $saldoAnterior, $saldoNovo, $username]);
+
+                        $itemsAffected[] = [
+                            'id_nissi' => $comp['id_kit_nissi'],
+                            'qtd' => $qtdBaixar,
+                            'saldo_anterior' => $saldoAnterior,
+                            'saldo_novo' => $saldoNovo,
+                            'tipo' => 'SAIDA_PICKING'
+                        ];
+                    }
+                }
+                $pdo->prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = ?, estoque_deduzido = 1 WHERE order_id = ?")
+                    ->execute([$newStatus, $separadoEm, $orderId]);
+            } else {
+                if (!empty($pedido['estoque_deduzido']) && count($componentes) > 0) {
+                    foreach ($componentes as $comp) {
+                        $qtdEstornar = ((int)($pedido['quantidade'] ?? 1)) * ((int)($comp['qtd_kit'] ?? 1));
+                        
+                        $saldoStmt = $pdo->prepare("SELECT saldo_atual FROM estoque_saldos WHERE id_nissi = ?");
+                        $saldoStmt->execute([$comp['id_kit_nissi']]);
+                        $saldoRow = $saldoStmt->fetch(PDO::FETCH_ASSOC);
+                        
+                        $saldoAnterior = $saldoRow ? (int)$saldoRow['saldo_atual'] : 0;
+                        $saldoNovo = $saldoAnterior + $qtdEstornar;
+
+                        if ($saldoRow) {
+                            $pdo->prepare("UPDATE estoque_saldos SET saldo_atual = ?, atualizado_em = CURRENT_TIMESTAMP WHERE id_nissi = ?")
+                                ->execute([$saldoNovo, $comp['id_kit_nissi']]);
+                        } else {
+                            $pdo->prepare("INSERT INTO estoque_saldos (id_nissi, saldo_atual, estoque_minimo, atualizado_em) VALUES (?, ?, 5, CURRENT_TIMESTAMP)")
+                                ->execute([$comp['id_kit_nissi'], $saldoNovo]);
+                        }
+
+                        $pdo->prepare("INSERT INTO estoque_movimentacoes (id_nissi, order_id, tipo, quantidade, saldo_anterior, saldo_novo, usuario) VALUES (?, ?, 'ESTORNO_PICKING', ?, ?, ?, ?)")
+                            ->execute([$comp['id_kit_nissi'], $orderId, $qtdEstornar, $saldoAnterior, $saldoNovo, $username]);
+
+                        $itemsAffected[] = [
+                            'id_nissi' => $comp['id_kit_nissi'],
+                            'qtd' => $qtdEstornar,
+                            'saldo_anterior' => $saldoAnterior,
+                            'saldo_novo' => $saldoNovo,
+                            'tipo' => 'ESTORNO_PICKING'
+                        ];
+                    }
+                }
+                $pdo->prepare("UPDATE pedidos_vendas SET status_picking = ?, separado_em = NULL, estoque_deduzido = 0 WHERE order_id = ?")
+                    ->execute([$newStatus, $orderId]);
+            }
+            $pdo->commit();
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            http_response_code(500);
+            echo json_encode(['error' => 'Falha ao atualizar status e estoque: ' . $e->getMessage()]);
+            exit;
+        }
 
         echo json_encode([
             'success' => true,
             'order_id' => $orderId,
             'new_status' => $newStatus,
-            'message' => "Pedido {$orderId} marcado como {$newStatus}!"
-        ]);
+            'items_affected' => $itemsAffected,
+            'message' => ($newStatus === 'separado')
+                ? (count($itemsAffected) > 0 ? "Pedido separado! " . count($itemsAffected) . " peça(s) deduzida(s) do estoque." : "Pedido separado! (Item próprio sem peças Nissi)")
+                : (count($itemsAffected) > 0 ? "Pedido desmarcado! " . count($itemsAffected) . " peça(s) estornada(s) ao estoque." : "Pedido desmarcado!")
+        ], JSON_UNESCAPED_UNICODE);
         exit;
     }
 
